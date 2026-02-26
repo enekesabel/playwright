@@ -88,16 +88,23 @@ export class Highlight {
 
   install() {
     // NOTE: document.documentElement can be null: https://github.com/microsoft/TypeScript/issues/50078
-    if (!this._injectedScript.document.documentElement)
+    const documentElement = this._injectedScript.document.documentElement;
+    if (!documentElement)
       return;
-    if (!this._injectedScript.document.documentElement.contains(this._glassPaneElement) || this._glassPaneElement.nextElementSibling)
-      this._injectedScript.document.documentElement.appendChild(this._glassPaneElement);
-    this._bringToFront();
+    const needsReattach = !documentElement.contains(this._glassPaneElement) || !!this._glassPaneElement.nextElementSibling;
+    if (needsReattach)
+      documentElement.appendChild(this._glassPaneElement);
+    if (needsReattach || !this._isPopoverOpen())
+      this._bringToFront();
   }
 
   private _bringToFront() {
     this._glassPaneElement.hidePopover();
     this._glassPaneElement.showPopover();
+  }
+
+  private _isPopoverOpen(): boolean {
+    return this._glassPaneElement.matches(':popover-open');
   }
 
   setLanguage(language: Language) {
