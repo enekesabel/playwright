@@ -33,6 +33,8 @@ import { BrowserFrame } from './browserFrame';
 import type { ElementInfo } from '@recorder/recorderTypes';
 import { parseAriaSnapshot } from '@isomorphic/ariaSnapshot';
 import yaml from 'yaml';
+import { PlaybackButtons } from './playbackControl';
+import type { PlaybackState } from './playbackControl';
 
 export type HighlightedElement = {
   locator?: string,
@@ -49,7 +51,8 @@ export const SnapshotTabsView: React.FunctionComponent<{
   setIsInspecting: (isInspecting: boolean) => void,
   highlightedElement: HighlightedElement,
   setHighlightedElement: (element: HighlightedElement) => void,
-}> = ({ action, model, sdkLanguage, testIdAttributeName, isInspecting, setIsInspecting, highlightedElement, setHighlightedElement }) => {
+  playback: PlaybackState
+}> = ({ action, model, sdkLanguage, testIdAttributeName, isInspecting, setIsInspecting, highlightedElement, setHighlightedElement, playback }) => {
   const [snapshotTab, setSnapshotTab] = React.useState<'action'|'before'|'after'>('action');
 
   const [shouldPopulateCanvasFromScreenshot] = useSetting('shouldPopulateCanvasFromScreenshot', false);
@@ -79,6 +82,7 @@ export const SnapshotTabsView: React.FunctionComponent<{
         })}
       </div>
       <div style={{ flex: 'auto' }}></div>
+      <PlaybackButtons playback={playback} />
       <ToolbarButton icon='link-external' title='Open snapshot in a new tab' disabled={!snapshotUrls?.popoutUrl} onClick={() => {
         const win = window.open(snapshotUrls?.popoutUrl || '', '_blank');
         win?.addEventListener('DOMContentLoaded', () => {
@@ -184,8 +188,8 @@ export const SnapshotView: React.FunctionComponent<{
       iteration={loadingRef.current.iteration} />
     <SnapshotWrapper snapshotInfo={snapshotInfo}>
       <div className='snapshot-switcher'>
-        <iframe ref={iframeRef0} name='snapshot' title='DOM Snapshot' className={clsx(loadingRef.current.visibleIframe === 0 && 'snapshot-visible')}></iframe>
-        <iframe ref={iframeRef1} name='snapshot' title='DOM Snapshot' className={clsx(loadingRef.current.visibleIframe === 1 && 'snapshot-visible')}></iframe>
+        <iframe ref={iframeRef0} name='snapshot' title='DOM Snapshot' sandbox='allow-same-origin allow-scripts' className={clsx(loadingRef.current.visibleIframe === 0 && 'snapshot-visible')}></iframe>
+        <iframe ref={iframeRef1} name='snapshot' title='DOM Snapshot' sandbox='allow-same-origin allow-scripts' className={clsx(loadingRef.current.visibleIframe === 1 && 'snapshot-visible')}></iframe>
       </div>
     </SnapshotWrapper>
   </div>;
@@ -325,10 +329,9 @@ export type Snapshot = {
   snapshotName: string;
   pageId: string;
   point?: { x: number, y: number };
-  hasInputTarget?: boolean;
 };
 
-const createSnapshot = (action: ActionTraceEvent, snapshotNameKey: 'beforeSnapshot' | 'afterSnapshot' | 'inputSnapshot', hasInputTarget: boolean = false): Snapshot | undefined => {
+const createSnapshot = (action: ActionTraceEvent, snapshotNameKey: 'beforeSnapshot' | 'afterSnapshot' | 'inputSnapshot'): Snapshot | undefined => {
   if (!action)
     return undefined;
 
@@ -348,7 +351,6 @@ const createSnapshot = (action: ActionTraceEvent, snapshotNameKey: 'beforeSnapsh
     snapshotName,
     pageId: action.pageId,
     point: action.point,
-    hasInputTarget,
   };
 };
 
@@ -409,7 +411,7 @@ export function collectSnapshots(action: ActionTraceEvent | undefined): Snapshot
       afterSnapshot = beforeSnapshot;
   }
 
-  const actionSnapshot = createSnapshot(action, 'inputSnapshot', true) ?? afterSnapshot;
+  const actionSnapshot = createSnapshot(action, 'inputSnapshot') ?? afterSnapshot;
   if (actionSnapshot)
     actionSnapshot.point = action.point;
   return { action: actionSnapshot, before: beforeSnapshot, after: afterSnapshot };
@@ -426,8 +428,6 @@ export function extendSnapshot(traceUri: string, snapshot: Snapshot, shouldPopul
   if (snapshot.point) {
     params.set('pointX', String(snapshot.point.x));
     params.set('pointY', String(snapshot.point.y));
-    if (snapshot.hasInputTarget)
-      params.set('hasInputTarget', '1');
   }
   if (shouldPopulateCanvasFromScreenshot)
     params.set('shouldPopulateCanvasFromScreenshot', '1');

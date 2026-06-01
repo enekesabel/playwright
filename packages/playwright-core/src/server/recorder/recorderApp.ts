@@ -17,11 +17,12 @@
 import fs from 'fs';
 import path from 'path';
 
-import { isUnderTest } from '../utils/debug';
-import { mime } from '../../utilsBundle';
+import mime from 'mime';
+import { isUnderTest } from '@utils/debug';
+import { libPath } from '../../package';
 import { syncLocalStorageWithSettings } from '../launchApp';
 import { launchApp } from '../launchApp';
-import { ProgressController } from '../progress';
+import { nullProgress, ProgressController } from '../progress';
 import { ThrottledFile } from './throttledFile';
 import { languageSet } from '../codegen/languages';
 import { collapseActions, shouldMergeAction } from './recorderUtils';
@@ -94,7 +95,7 @@ export class RecorderApp {
         }
 
         const uri = route.request().url().substring('https://playwright/'.length);
-        const file = require.resolve('../../vite/recorder/' + uri);
+        const file = path.join(libPath('vite', 'recorder'), uri);
         fs.promises.readFile(file).then(buffer => {
           route.fulfill({
             status: 200,
@@ -111,7 +112,7 @@ export class RecorderApp {
 
       this._page.once('close', () => {
         this._recorder.close();
-        this._page.browserContext.close({ reason: 'Recorder window closed' }).catch(() => {});
+        this._page.browserContext.close(nullProgress, { reason: 'Recorder window closed' }).catch(() => {});
         delete (inspectedContext as any)[recorderAppSymbol];
       });
 
@@ -142,7 +143,7 @@ export class RecorderApp {
         if (source) {
           if (source.isRecorded)
             this._selectedGeneratorId = source.id;
-          this._recorder.setLanguage(source.language);
+          await this._recorder.setLanguage(source.language);
         }
       },
       setAutoExpect: async (params: { autoExpect: boolean }) => {
@@ -150,7 +151,7 @@ export class RecorderApp {
         this._updateActions();
       },
       setMode: async (params: { mode: Mode }) => {
-        this._recorder.setMode(params.mode);
+        await this._recorder.setMode(params.mode);
       },
       resume: async () => {
         this._recorder.resume();
@@ -163,13 +164,13 @@ export class RecorderApp {
       },
       highlightRequested: async (params: { selector?: string; ariaTemplate?: AriaTemplateNode }) => {
         if (params.selector)
-          this._recorder.setHighlightedSelector(params.selector);
+          await this._recorder.setHighlightedSelector(params.selector);
         if (params.ariaTemplate)
-          this._recorder.setHighlightedAriaTemplate(params.ariaTemplate);
+          await this._recorder.setHighlightedAriaTemplate(params.ariaTemplate);
       },
     };
 
-    await this._page.exposeBinding(progress, 'sendCommand', false, async (_, data: any) => {
+    await this._page.exposeBinding(progress, 'sendCommand', async (_, data: any) => {
       const { method, params } = data as { method: string; params: any };
       return await (dispatcher as any)[method].call(dispatcher, params);
     });
@@ -188,7 +189,7 @@ export class RecorderApp {
   }
 
   async close() {
-    await this._page.close();
+    await this._page.close(nullProgress);
   }
 
   static showInspectorNoReply(context: BrowserContext) {
@@ -202,8 +203,10 @@ export class RecorderApp {
       return;
     (inspectedContext as any)[recorderAppSymbol] = true;
     const sdkLanguage = inspectedContext._browser.sdkLanguage();
+    const isChromium = inspectedContext._browser.options.browserType === 'chromium';
     const headed = !!inspectedContext._browser.options.headful;
-    const recorderPlaywright = (require('../playwright').createPlaywright as typeof import('../playwright').createPlaywright)({ sdkLanguage: 'javascript', isInternalPlaywright: true });
+    const { createPlaywright } = require('../playwright') as typeof import('../playwright');
+    const recorderPlaywright = createPlaywright({ sdkLanguage: 'javascript', isInternalPlaywright: true });
     const { context: appContext, page } = await launchApp(recorderPlaywright.chromium, {
       sdkLanguage,
       windowSize: { width: 600, height: 600 },
@@ -211,16 +214,16 @@ export class RecorderApp {
       persistentContextOptions: {
         noDefaultViewport: true,
         headless: !!process.env.PWTEST_CLI_HEADLESS || (isUnderTest() && !headed),
-        cdpPort: isUnderTest() ? 0 : undefined,
+        args: isUnderTest() ? ['--remote-debugging-port=0'] : undefined,
         handleSIGINT: params.handleSIGINT,
-        executablePath: inspectedContext._browser.options.isChromium ? inspectedContext._browser.options.customExecutablePath : undefined,
+        executablePath: isChromium ? inspectedContext._browser.options.customExecutablePath : undefined,
         // Use the same channel as the inspected context to guarantee that the browser is installed.
-        channel: inspectedContext._browser.options.isChromium ? inspectedContext._browser.options.channel : undefined,
+        channel: isChromium ? inspectedContext._browser.options.channel : undefined,
       }
     });
     const controller = new ProgressController();
     await controller.run(async progress => {
-      await appContext._browser._defaultContext!._loadDefaultContextAsIs(progress);
+      await appContext._browser._defaultContext!.loadDefaultContextAsIs(progress);
     });
 
     const appParams = {
@@ -228,8 +231,8 @@ export class RecorderApp {
       sdkLanguage: inspectedContext._browser.sdkLanguage(),
       wsEndpointForTest: inspectedContext._browser.options.wsEndpoint,
       headed: !!inspectedContext._browser.options.headful,
-      executablePath: inspectedContext._browser.options.isChromium ? inspectedContext._browser.options.customExecutablePath : undefined,
-      channel: inspectedContext._browser.options.isChromium ? inspectedContext._browser.options.channel : undefined,
+      executablePath: isChromium ? inspectedContext._browser.options.customExecutablePath : undefined,
+      channel: isChromium ? inspectedContext._browser.options.channel : undefined,
       ...params,
     };
 
@@ -253,7 +256,7 @@ export class RecorderApp {
 
     recorder.on(RecorderEvent.ContextClosed, () => {
       this._throttledOutputFile?.flush();
-      this._page.browserContext.close({ reason: 'Recorder window closed' }).catch(() => {});
+      this._page.browserContext.close(nullProgress, { reason: 'Recorder window closed' }).catch(() => {});
     });
 
     recorder.on(RecorderEvent.ModeChanged, (mode: Mode) => {
@@ -270,7 +273,7 @@ export class RecorderApp {
 
     recorder.on(RecorderEvent.ElementPicked, (elementInfo: ElementInfo, userGesture?: boolean) => {
       if (userGesture)
-        this._page.bringToFront();
+        this._page.bringToFront(nullProgress).catch(() => {});
       this._frontend.elementPicked({ elementInfo, userGesture });
     });
 
@@ -396,7 +399,7 @@ function createRecorderFrontend(page: Page): RecorderFrontend {
       if (typeof prop !== 'string')
         return undefined;
       return (params: any) => {
-        page.mainFrame().evaluateExpression(((event: { method: string, params?: any }) => {
+        page.mainFrame().evaluateExpression(nullProgress, ((event: { method: string, params?: any }) => {
           window.dispatch(event);
         }).toString(), { isFunction: true }, { method: prop, params }).catch(() => {});
       };

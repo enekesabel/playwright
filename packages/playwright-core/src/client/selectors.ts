@@ -21,7 +21,7 @@ import type { SelectorEngine } from './types';
 import type * as api from '../../types/types';
 import type * as channels from '@protocol/channels';
 import type { BrowserContext } from './browserContext';
-import type { Platform } from './platform';
+import type { Platform } from '@isomorphic/platform';
 
 export class Selectors implements api.Selectors {
   private _platform: Platform;
@@ -47,8 +47,10 @@ export class Selectors implements api.Selectors {
   setTestIdAttribute(attributeName: string) {
     this._testIdAttributeName = attributeName;
     setTestIdAttribute(attributeName);
-    for (const context of this._contextsForSelectors)
+    for (const context of this._contextsForSelectors) {
+      context._options.testIdAttributeName = attributeName;
       context._channel.setTestIdAttributeName({ testIdAttributeName: attributeName }).catch(() => {});
+    }
   }
 
   _withSelectorOptions<T>(options: T) {

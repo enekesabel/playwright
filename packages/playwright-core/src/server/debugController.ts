@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
+import yaml from 'yaml';
+import { parseAriaSnapshotUnsafe } from '@isomorphic/ariaSnapshot';
+import { unsafeLocatorOrSelectorAsSelector } from '@isomorphic/locatorParser';
+import { gracefullyProcessExitDoNotHang } from '@utils/processLauncher';
+import { asLocator } from '@isomorphic/locatorGenerators';
 import { SdkObject, createInstrumentation } from './instrumentation';
-import { gracefullyProcessExitDoNotHang } from './utils/processLauncher';
 import { Recorder, RecorderEvent } from './recorder';
-import { asLocator  } from '../utils';
-import { parseAriaSnapshotUnsafe } from '../utils/isomorphic/ariaSnapshot';
-import { yaml } from '../utilsBundle';
-import { unsafeLocatorOrSelectorAsSelector } from '../utils/isomorphic/locatorParser';
 import { generateCode } from './codegen/language';
 import { collapseActions } from './recorder/recorderUtils';
 import { JavaScriptLanguageGenerator } from './codegen/javascript';
 
-import type { Language } from '../utils';
+import type { Language } from '@isomorphic/locatorGenerators';
 import type { BrowserContext } from './browserContext';
 import type { InstrumentationListener } from './instrumentation';
 import type { Playwright } from './playwright';
@@ -52,15 +52,19 @@ export class DebugController extends SdkObject {
     this._playwright = playwright;
   }
 
-  initialize(codegenId: string, sdkLanguage: Language) {
+  initialize(progress: Progress, codegenId: string, sdkLanguage: Language) {
     this._sdkLanguage = sdkLanguage;
   }
 
   dispose() {
-    this.setReportStateChanged(false);
+    this._setReportStateChanged(false);
   }
 
-  setReportStateChanged(enabled: boolean) {
+  setReportStateChanged(progress: Progress, enabled: boolean) {
+    this._setReportStateChanged(enabled);
+  }
+
+  private _setReportStateChanged(enabled: boolean) {
     if (enabled && !this._trackHierarchyListener) {
       this._trackHierarchyListener = {
         onPageOpen: () => this._emitSnapshot(false),
@@ -75,14 +79,16 @@ export class DebugController extends SdkObject {
   }
 
   async setRecorderMode(progress: Progress, params: { mode: Mode, testIdAttributeName?: string, generateAutoExpect?: boolean }) {
-    await progress.race(this._closeBrowsersWithoutPages());
+    await this._closeBrowsersWithoutPages(progress);
     this._generateAutoExpect = !!params.generateAutoExpect;
 
     if (params.mode === 'none') {
+      const promises = [];
       for (const recorder of await progress.race(this._allRecorders())) {
-        recorder.hideHighlightedSelector();
-        recorder.setMode('none');
+        promises.push(recorder.hideHighlightedSelector());
+        promises.push(recorder.setMode('none'));
       }
+      await progress.race(Promise.all(promises));
       return;
     }
 
@@ -112,20 +118,24 @@ export class DebugController extends SdkObject {
     if (params.selector)
       unsafeLocatorOrSelectorAsSelector(this._sdkLanguage, params.selector, 'data-testid');
     const ariaTemplate = params.ariaTemplate ? parseAriaSnapshotUnsafe(yaml, params.ariaTemplate) : undefined;
+    const promises = [];
     for (const recorder of await progress.race(this._allRecorders())) {
       if (ariaTemplate)
-        recorder.setHighlightedAriaTemplate(ariaTemplate);
+        promises.push(recorder.setHighlightedAriaTemplate(ariaTemplate));
       else if (params.selector)
-        recorder.setHighlightedSelector(params.selector);
+        promises.push(recorder.setHighlightedSelector(params.selector));
     }
+    await progress.race(Promise.all(promises));
   }
 
   async hideHighlight(progress: Progress) {
+    const promises = [];
     // Hide all active recorder highlights.
     for (const recorder of await progress.race(this._allRecorders()))
-      recorder.hideHighlightedSelector();
+      promises.push(recorder.hideHighlightedSelector());
     // Hide all locator.highlight highlights.
-    await Promise.all(this._playwright.allPages().map(p => p.hideHighlight().catch(() => {})));
+    promises.push(...this._playwright.allPages().map(p => p.hideHighlight().catch(() => {})));
+    await progress.race(Promise.all(promises));
   }
 
   async resume(progress: Progress) {
@@ -133,7 +143,7 @@ export class DebugController extends SdkObject {
       recorder.resume();
   }
 
-  kill() {
+  kill(progress: Progress) {
     gracefullyProcessExitDoNotHang(0);
   }
 
@@ -155,14 +165,14 @@ export class DebugController extends SdkObject {
     return nonNullRecorders;
   }
 
-  private async _closeBrowsersWithoutPages() {
+  private async _closeBrowsersWithoutPages(progress: Progress) {
     for (const browser of this._playwright.allBrowsers()) {
       for (const context of browser.contexts()) {
         if (!context.pages().length)
-          await context.close({ reason: 'Browser collected' });
+          await context.close(progress, { reason: 'Browser collected' });
       }
       if (!browser.contexts())
-        await browser.close({ reason: 'Browser collected' });
+        await browser.close(progress, { reason: 'Browser collected' });
     }
   }
 }

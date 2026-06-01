@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-import { eventsHelper } from '../utils/eventsHelper';
+import { eventsHelper } from '@utils/eventsHelper';
 import * as network from '../network';
 
 import type { FFSession } from './ffConnection';
 import type { HeadersArray } from '../../server/types';
-import type { RegisteredListener } from '../utils/eventsHelper';
+import type { RegisteredListener } from '@utils/eventsHelper';
 import type * as frames from '../frames';
 import type { Page } from '../page';
 import type * as types from '../types';
@@ -144,8 +144,7 @@ export class FFNetworkManager {
       this._requests.delete(request._id);
       response._requestFinished(responseEndTime);
     }
-    if (event.protocolVersion)
-      response._setHttpVersion(event.protocolVersion);
+    response._setHttpVersion(event.protocolVersion ?? null);
     this._page.frameManager.reportRequestFinished(request.request, response);
   }
 
@@ -159,6 +158,7 @@ export class FFNetworkManager {
       response.setTransferSize(null);
       response.setEncodedBodySize(null);
       response._requestFinished(-1);
+      response._setHttpVersion(null);
     }
     request.request._setFailureText(event.errorCode);
     this._page.frameManager.requestFailed(request.request, event.errorCode === 'NS_BINDING_ABORTED');

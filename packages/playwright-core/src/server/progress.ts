@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { assert } from '@isomorphic/assert';
+import { monotonicTime } from '@isomorphic/time';
+import { debugLogger } from '@utils/debugLogger';
 import { TimeoutError } from './errors';
-import { assert, monotonicTime, debugLogger } from '../utils';
-import { ManualPromise } from '../utils/isomorphic/manualPromise';
 
 import type { Progress } from '@protocol/progress';
 import type { CallMetadata, SdkObject } from './instrumentation';
@@ -42,15 +44,14 @@ export class ProgressController {
   static createForSdkObject(sdkObject: SdkObject, callMetadata: CallMetadata) {
     const logName = sdkObject.logName || 'api';
     return new ProgressController(callMetadata, message => {
+      // Note: "attribution.playwright" is undefined in DebugController. Unfortunate!
+      if (logName === 'api' && sdkObject.attribution.playwright?.options.isInternalPlaywright)
+        return;
       debugLogger.log(logName, message);
       sdkObject.instrumentation.onCallLog(sdkObject, callMetadata, logName, message);
     });
   }
 
-  static runInternalTask(task: (progress: Progress) => Promise<void>, timeout?: number) {
-    const progress = new ProgressController();
-    return progress.run(task, timeout);
-  }
 
   async abort(error: Error) {
     if (this._state === 'running') {
@@ -68,6 +69,9 @@ export class ProgressController {
     this._state = 'running';
     let timer: NodeJS.Timeout | undefined;
 
+    let outerProgress: string | undefined;
+    let allowConcurrent = false;
+
     const progress: Progress = {
       timeout: timeout ?? 0,
       deadline,
@@ -81,11 +85,26 @@ export class ProgressController {
         this._onCallLog?.(message);
       },
       metadata: this.metadata,
+      setAllowConcurrentOrNestedRaces: (allow: boolean) => {
+        allowConcurrent = allow;
+      },
       race: <T>(promise: Promise<T> | Promise<T>[]) => {
+        if (process.env.PW_DETECT_NESTED_PROGRESS) {
+          const innerProgress = new Error().stack;
+          if (outerProgress && !allowConcurrent && outerProgress !== innerProgress) {
+            // eslint-disable-next-line no-console
+            console.error('Cannot call race() inside another race()');
+            // eslint-disable-next-line no-console
+            console.error('<<<<<OUTER>>>>>:', outerProgress);
+            // eslint-disable-next-line no-console
+            console.error('<<<<<INNER>>>>>:', innerProgress);
+          }
+          outerProgress = innerProgress;
+        }
         const promises = Array.isArray(promise) ? promise : [promise];
         if (!promises.length)
           return Promise.resolve();
-        return Promise.race([...promises, this._forceAbortPromise]);
+        return Promise.race([...promises, this._forceAbortPromise]).finally(() => outerProgress = undefined);
       },
       wait: async (timeout: number) => {
         // Timeout = 0 here means nowait. Counter to what it typically is (wait forever).
@@ -145,3 +164,27 @@ export async function raceUncancellableOperationWithCleanup<T>(progress: Progres
     throw error;
   }
 }
+
+export const nullProgress: Progress = {
+  timeout: 0,
+  deadline: 0,
+  disableTimeout() { },
+  log() { },
+  race<T>(promise: Promise<T> | Promise<T>[]) {
+    const promises = Array.isArray(promise) ? promise : [promise];
+    return Promise.race(promises);
+  },
+  wait: async (timeout: number) => await new Promise<void>(f => setTimeout(f, timeout)),
+  signal: new AbortController().signal,
+  metadata: {
+    id: '',
+    startTime: 0,
+    endTime: 0,
+    type: '',
+    method: '',
+    params: {},
+    log: [],
+    internal: true,
+  },
+  setAllowConcurrentOrNestedRaces() { },
+};

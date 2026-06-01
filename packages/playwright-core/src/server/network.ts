@@ -14,19 +14,20 @@
  * limitations under the License.
  */
 
-import { assert } from '../utils';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { assert } from '@isomorphic/assert';
 import { BrowserContext } from './browserContext';
 import { APIRequestContext } from './fetch';
 import { SdkObject } from './instrumentation';
-import { ManualPromise } from '../utils/isomorphic/manualPromise';
 
 import type * as contexts from './browserContext';
 import type * as frames from './frames';
 import type * as pages from './page';
 import type * as types from './types';
 import type { NormalizedContinueOverrides } from './types';
-import type { HeadersArray, NameValue } from '../utils/isomorphic/types';
+import type { HeadersArray, NameValue } from '@isomorphic/types';
 import type * as channels from '@protocol/channels';
+import type { Progress } from '@protocol/progress';
 
 
 export function filterCookies(cookies: channels.NetworkCookie[], urls: string[]): channels.NetworkCookie[] {
@@ -213,6 +214,21 @@ export class Request extends SdkObject {
     this._isFavicon = url.endsWith('/favicon.ico') || !!redirectedFrom?._isFavicon;
   }
 
+  async raceWithPageClosure<T>(progress: Progress, promise: Promise<T>): Promise<T> {
+    const scope = this._serviceWorker?.openScope ?? this._frame?._page.openScope;
+    if (scope)
+      return await progress.race(scope.race(promise));
+    return await progress.race(promise);
+  }
+
+  async rawRequestHeaders(progress: Progress): Promise<HeadersArray> {
+    return await this.raceWithPageClosure(progress, this._rawRequestHeaders());
+  }
+
+  async response(progress: Progress): Promise<Response | null> {
+    return await this.raceWithPageClosure(progress, this._waitForResponse());
+  }
+
   _setFailureText(failureText: string) {
     this._failureText = failureText;
     this._waitForResponsePromise.resolve(null);
@@ -258,11 +274,11 @@ export class Request extends SdkObject {
       this._rawRequestHeadersPromise.resolve(headers || this._headers);
   }
 
-  async rawRequestHeaders(): Promise<HeadersArray> {
+  private async _rawRequestHeaders(): Promise<HeadersArray> {
     return this._overrides?.headers || this._rawRequestHeadersPromise;
   }
 
-  response(): Promise<Response | null> {
+  private _waitForResponse(): Promise<Response | null> {
     return this._waitForResponsePromise;
   }
 
@@ -313,12 +329,12 @@ export class Request extends SdkObject {
     return this._bodySize || this.postDataBuffer()?.length || 0;
   }
 
-  async requestHeadersSize(): Promise<number> {
+  async _requestHeadersSize(): Promise<number> {
     let headersSize = 4; // 4 = 2 spaces + 2 line breaks (GET /path \r\n)
     headersSize += this.method().length;
     headersSize += (new URL(this.url())).pathname.length;
     headersSize += 8; // httpVersion
-    const headers = await this.rawRequestHeaders();
+    const headers = await this._rawRequestHeaders();
     for (const header of headers)
       headersSize += header.name.length + header.value.length + 4; // 4 = ': ' + '\r\n'
     return headersSize;
@@ -417,7 +433,7 @@ export class Route extends SdkObject {
     headers.push({ name: 'vary', value: 'Origin' });
   }
 
-  async continue(overrides: types.NormalizedContinueOverrides) {
+  async continue(overrides: channels.RouteContinueParams) {
     if (overrides.url) {
       const newUrl = new URL(overrides.url);
       const oldUrl = new URL(this._request.url());
@@ -508,13 +524,13 @@ export class Response extends SdkObject {
   private _serverAddrPromise = new ManualPromise<RemoteAddr | undefined>();
   private _securityDetailsPromise = new ManualPromise<SecurityDetails | undefined>();
   private _rawResponseHeadersPromise = new ManualPromise<HeadersArray>();
-  private _httpVersion: string | undefined;
+  private _httpVersionPromise = new ManualPromise<string | null>();
   private _fromServiceWorker: boolean;
   private _encodedBodySizePromise = new ManualPromise<number | null>();
   private _transferSizePromise = new ManualPromise<number | null>();
   private _responseHeadersSizePromise = new ManualPromise<number | null>();
 
-  constructor(request: Request, status: number, statusText: string, headers: HeadersArray, timing: ResourceTiming, getResponseBodyCallback: GetResponseBodyCallback, fromServiceWorker: boolean, httpVersion?: string) {
+  constructor(request: Request, status: number, statusText: string, headers: HeadersArray, timing: ResourceTiming, getResponseBodyCallback: GetResponseBodyCallback, fromServiceWorker: boolean) {
     super(request.frame() || request._context, 'response');
     this._request = request;
     this._timing = timing;
@@ -526,8 +542,31 @@ export class Response extends SdkObject {
       this._headersMap.set(name.toLowerCase(), value);
     this._getResponseBodyCallback = getResponseBodyCallback;
     this._request._setResponse(this);
-    this._httpVersion = httpVersion;
     this._fromServiceWorker = fromServiceWorker;
+  }
+
+  async body(progress: Progress): Promise<Buffer> {
+    return await this._request.raceWithPageClosure(progress, this.internalBody());
+  }
+
+  async securityDetails(progress: Progress): Promise<SecurityDetails | null> {
+    return await this._request.raceWithPageClosure(progress, this.internalSecurityDetails());
+  }
+
+  async serverAddr(progress: Progress): Promise<RemoteAddr | null> {
+    return (await this._request.raceWithPageClosure(progress, this._serverAddrPromise)) || null;
+  }
+
+  async rawResponseHeaders(progress: Progress): Promise<NameValue[]> {
+    return await this._request.raceWithPageClosure(progress, this._rawResponseHeadersPromise);
+  }
+
+  async httpVersion(progress: Progress): Promise<string> {
+    return await this._request.raceWithPageClosure(progress, this._httpVersion());
+  }
+
+  async sizes(progress: Progress): Promise<ResourceSizes> {
+    return await this._request.raceWithPageClosure(progress, this._sizes());
   }
 
   _serverAddrFinished(addr?: RemoteAddr) {
@@ -546,8 +585,8 @@ export class Response extends SdkObject {
     this._finishedPromise.resolve();
   }
 
-  _setHttpVersion(httpVersion: string) {
-    this._httpVersion = httpVersion;
+  _setHttpVersion(httpVersion: string | null) {
+    this._httpVersionPromise.resolve(httpVersion);
   }
 
   url(): string {
@@ -568,10 +607,6 @@ export class Response extends SdkObject {
 
   headerValue(name: string): string | undefined {
     return this._headersMap.get(name);
-  }
-
-  async rawResponseHeaders(): Promise<NameValue[]> {
-    return this._rawResponseHeadersPromise;
   }
 
   // "null" means no raw headers available - we'll use provisional headers as raw headers.
@@ -596,15 +631,11 @@ export class Response extends SdkObject {
     return this._timing;
   }
 
-  async serverAddr(): Promise<RemoteAddr|null> {
-    return await this._serverAddrPromise || null;
-  }
-
-  async securityDetails(): Promise<SecurityDetails|null> {
+  async internalSecurityDetails(): Promise<SecurityDetails|null> {
     return await this._securityDetailsPromise || null;
   }
 
-  body(): Promise<Buffer> {
+  internalBody(): Promise<Buffer> {
     if (!this._contentPromise) {
       this._contentPromise = this._finishedPromise.then(async () => {
         if (this._status >= 300 && this._status <= 399)
@@ -631,14 +662,15 @@ export class Response extends SdkObject {
     return this._request.frame();
   }
 
-  httpVersion(): string {
-    if (!this._httpVersion)
+  private async _httpVersion(): Promise<string> {
+    const httpVersion = await this._httpVersionPromise || null;
+    if (!httpVersion)
       return 'HTTP/1.1';
-    if (this._httpVersion === 'http/1.1')
+    if (httpVersion === 'http/1.1')
       return 'HTTP/1.1';
-    if (this._httpVersion === 'h2')
+    if (httpVersion === 'h2')
       return 'HTTP/2.0';
-    return this._httpVersion;
+    return httpVersion;
   }
 
   fromServiceWorker(): boolean {
@@ -662,8 +694,8 @@ export class Response extends SdkObject {
     return headersSize;
   }
 
-  async sizes(): Promise<ResourceSizes> {
-    const requestHeadersSize = await this._request.requestHeadersSize();
+  private async _sizes(): Promise<ResourceSizes> {
+    const requestHeadersSize = await this._request._requestHeadersSize();
     const responseHeadersSize = await this.responseHeadersSize();
 
     let encodedBodySize = await this._encodedBodySizePromise;

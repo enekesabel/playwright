@@ -407,7 +407,7 @@ export namespace Protocol {
     /**
      * Pseudo-style identifier (see <code>enum PseudoId</code> in <code>RenderStyleConstants.h</code>).
      */
-    export type PseudoId = "first-line"|"first-letter"|"grammar-error"|"highlight"|"marker"|"before"|"after"|"selection"|"backdrop"|"spelling-error"|"target-text"|"checkmark"|"picker-icon"|"view-transition"|"view-transition-group"|"view-transition-image-pair"|"view-transition-old"|"view-transition-new"|"-webkit-scrollbar"|"-webkit-resizer"|"-webkit-scrollbar-thumb"|"-webkit-scrollbar-button"|"-webkit-scrollbar-track"|"-webkit-scrollbar-track-piece"|"-webkit-scrollbar-corner";
+    export type PseudoId = "first-line"|"first-letter"|"grammar-error"|"highlight"|"marker"|"before"|"after"|"selection"|"backdrop"|"spelling-error"|"target-text"|"checkmark"|"picker-icon"|"slider-fill"|"slider-thumb"|"slider-track"|"view-transition"|"view-transition-group"|"view-transition-image-pair"|"view-transition-old"|"view-transition-new"|"-webkit-scrollbar"|"-webkit-resizer"|"-webkit-scrollbar-thumb"|"-webkit-scrollbar-button"|"-webkit-scrollbar-track"|"-webkit-scrollbar-track-piece"|"-webkit-scrollbar-corner";
     /**
      * Pseudo-style identifier (see <code>enum PseudoId</code> in <code>RenderStyleConstants.h</code>).
      */
@@ -801,7 +801,7 @@ export namespace Protocol {
     /**
      * Relevant layout information about the node. Things not in this list are not important to Web Inspector.
      */
-    export type LayoutFlag = "rendered"|"scrollable"|"flex"|"grid"|"event"|"slot-assigned"|"slot-filled";
+    export type LayoutFlag = "rendered"|"scrollable"|"flex"|"grid"|"subgrid"|"grid-lanes"|"event"|"slot-assigned"|"slot-filled";
     /**
      * The mode for how layout context type changes are handled (default: <code>Observed</code>). <code>Observed</code> limits handling to those nodes already known to the frontend by other means (generally, this means the node is a visible item in the Elements tab). <code>All</code> informs the frontend of all layout context type changes and all nodes with a known layout context are sent to the frontend.
      */
@@ -6101,6 +6101,17 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
     export type setResourceCachingDisabledReturnValue = {
     }
     /**
+     * Toggles whether resource data is cleared on page navigations / reloads.
+     */
+    export type setClearResourceDataOnNavigateParameters = {
+      /**
+       * Whether to clear resource data on navigations.
+       */
+      clearResourceDataOnNavigate: boolean;
+    }
+    export type setClearResourceDataOnNavigateReturnValue = {
+    }
+    /**
      * Loads a resource in the context of a frame on the inspected page without cross origin checks.
      */
     export type loadResourceParameters = {
@@ -6391,6 +6402,10 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
      * Coordinate system used by supplied coordinates.
      */
     export type CoordinateSystem = "Viewport"|"Page";
+    /**
+     * Image format used to encode a captured snapshot.
+     */
+    export type ImageFormat = "png"|"jpeg"|"webp";
     /**
      * Same-Site policy of a cookie.
      */
@@ -6985,10 +7000,18 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
        * By default, screenshot is inflated by device scale factor to avoid blurry image. This flag disables it.
        */
       omitDeviceScaleFactor?: boolean;
+      /**
+       * Image format of the resulting snapshot. Defaults to "png".
+       */
+      format?: ImageFormat;
+      /**
+       * Compression quality from 0 to 100 (ignored for the "png" format). Defaults to 80.
+       */
+      quality?: number;
     }
     export type snapshotRectReturnValue = {
       /**
-       * Base64-encoded image data (PNG).
+       * Base64-encoded image data.
        */
       dataURL: string;
     }
@@ -9366,6 +9389,7 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
     "Network.setExtraHTTPHeaders": Network.setExtraHTTPHeadersParameters;
     "Network.getResponseBody": Network.getResponseBodyParameters;
     "Network.setResourceCachingDisabled": Network.setResourceCachingDisabledParameters;
+    "Network.setClearResourceDataOnNavigate": Network.setClearResourceDataOnNavigateParameters;
     "Network.loadResource": Network.loadResourceParameters;
     "Network.getSerializedCertificate": Network.getSerializedCertificateParameters;
     "Network.resolveWebSocket": Network.resolveWebSocketParameters;
@@ -9670,6 +9694,7 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
     "Network.setExtraHTTPHeaders": Network.setExtraHTTPHeadersReturnValue;
     "Network.getResponseBody": Network.getResponseBodyReturnValue;
     "Network.setResourceCachingDisabled": Network.setResourceCachingDisabledReturnValue;
+    "Network.setClearResourceDataOnNavigate": Network.setClearResourceDataOnNavigateReturnValue;
     "Network.loadResource": Network.loadResourceReturnValue;
     "Network.getSerializedCertificate": Network.getSerializedCertificateReturnValue;
     "Network.resolveWebSocket": Network.resolveWebSocketReturnValue;

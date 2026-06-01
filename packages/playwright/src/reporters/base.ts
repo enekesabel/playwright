@@ -15,13 +15,16 @@
  */
 
 import path from 'path';
+import { Writable } from 'stream';
 
-import { getPackageManagerExecCommand, parseErrorStack } from 'playwright-core/lib/utils';
-import { ms as milliseconds } from 'playwright-core/lib/utilsBundle';
-import { colors as realColors, noColors } from 'playwright-core/lib/utils';
+import realColors from 'colors/safe';
+import { noColors } from '@isomorphic/colors';
+import { msToString } from '@isomorphic/formatUtils';
+import { parseErrorStack } from '@isomorphic/stackTrace';
+import { getPackageManagerExecCommand } from '@utils/env';
+import { fitToWidth } from '@utils/stringWidth';
 
-import { ansiRegex, resolveReporterOutputPath, stripAnsiEscapes } from '../util';
-import { getEastAsianWidth } from '../utilsBundle';
+import { resolveReporterOutputPath, stripAnsiEscapes } from '../util';
 
 import type { ReporterV2 } from './reporterV2';
 import type { FullConfig, FullResult, Location, Suite, TestCase, TestError, TestResult, TestStep } from '../../types/testReporter';
@@ -75,6 +78,19 @@ const originalProcessStdout = process.stdout;
 // eslint-disable-next-line no-restricted-properties
 const originalProcessStderr = process.stderr;
 
+class StripAnsiStream extends Writable {
+  private _target: NodeJS.WriteStream;
+
+  constructor(target: NodeJS.WriteStream) {
+    super();
+    this._target = target;
+  }
+
+  override _write(chunk: any, encoding: any, callback: any) {
+    this._target.write(stripAnsiEscapes(chunk.toString()), callback);
+  }
+}
+
 // Output goes to terminal.
 export const terminalScreen: TerminalScreen = (() => {
   let isTTY = !!originalProcessStdout.isTTY;
@@ -106,7 +122,8 @@ export const terminalScreen: TerminalScreen = (() => {
 
   let useColors = isTTY;
   if (process.env.DEBUG_COLORS === '0' || process.env.DEBUG_COLORS === 'false' ||
-      process.env.FORCE_COLOR === '0' || process.env.FORCE_COLOR === 'false')
+      process.env.FORCE_COLOR === '0' || process.env.FORCE_COLOR === 'false' ||
+      (process.env.NO_COLOR !== undefined && process.env.NO_COLOR !== ''))
     useColors = false;
   else if (process.env.DEBUG_COLORS || process.env.FORCE_COLOR)
     useColors = true;
@@ -118,8 +135,8 @@ export const terminalScreen: TerminalScreen = (() => {
     ttyWidth,
     ttyHeight,
     colors,
-    stdout: originalProcessStdout,
-    stderr: originalProcessStderr,
+    stdout: useColors ? originalProcessStdout : new StripAnsiStream(originalProcessStdout) as unknown as NodeJS.WriteStream,
+    stderr: useColors ? originalProcessStderr : new StripAnsiStream(originalProcessStderr) as unknown as NodeJS.WriteStream,
   };
 })();
 
@@ -260,7 +277,7 @@ export class TerminalReporter implements ReporterV2 {
     if (didNotRun)
       tokens.push(this.screen.colors.yellow(`  ${didNotRun} did not run`));
     if (expected)
-      tokens.push(this.screen.colors.green(`  ${expected} passed`) + this.screen.colors.dim(` (${milliseconds(this.result.duration)})`));
+      tokens.push(this.screen.colors.green(`  ${expected} passed`) + this.screen.colors.dim(` (${msToString(this.result.duration)})`));
     if (fatalErrors.length && expected + unexpected.length + interrupted.length + flaky.length > 0)
       tokens.push(this.screen.colors.red(`  ${fatalErrors.length === 1 ? '1 error was not a part of any test' : fatalErrors.length + ' errors were not a part of any test'}, see above for details`));
 
@@ -328,7 +345,7 @@ export class TerminalReporter implements ReporterV2 {
   private _printSlowTests() {
     const slowTests = this.getSlowTests();
     slowTests.forEach(([file, duration]) => {
-      this.writeLine(this.screen.colors.yellow('  Slow test file: ') + file + this.screen.colors.yellow(` (${milliseconds(duration)})`));
+      this.writeLine(this.screen.colors.yellow('  Slow test file: ') + file + this.screen.colors.yellow(` (${msToString(duration)})`));
     });
     if (slowTests.length)
       this.writeLine(this.screen.colors.yellow('  Consider running tests from slow files in parallel. See: https://playwright.dev/docs/test-parallel'));
@@ -614,58 +631,6 @@ export function prepareErrorStack(stack: string): {
   location?: Location;
 } {
   return parseErrorStack(stack, path.sep, !!process.env.PWDEBUGIMPL);
-}
-
-function characterWidth(c: string) {
-  return getEastAsianWidth.eastAsianWidth(c.codePointAt(0)!);
-}
-
-function stringWidth(v: string) {
-  let width = 0;
-  for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(v))
-    width += characterWidth(segment);
-  return width;
-}
-
-function suffixOfWidth(v: string, width: number) {
-  const segments = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(v)];
-  let suffixBegin = v.length;
-  for (const { segment, index } of segments.reverse()) {
-    const segmentWidth = stringWidth(segment);
-    if (segmentWidth > width)
-      break;
-    width -= segmentWidth;
-    suffixBegin = index;
-  }
-  return v.substring(suffixBegin);
-}
-
-// Leaves enough space for the "prefix" to also fit.
-export function fitToWidth(line: string, width: number, prefix?: string): string {
-  const prefixLength = prefix ? stripAnsiEscapes(prefix).length : 0;
-  width -= prefixLength;
-  if (stringWidth(line) <= width)
-    return line;
-
-  // Even items are plain text, odd items are control sequences.
-  const parts = line.split(ansiRegex);
-  const taken: string[] = [];
-  for (let i = parts.length - 1; i >= 0; i--) {
-    if (i % 2) {
-      // Include all control sequences to preserve formatting.
-      taken.push(parts[i]);
-    } else {
-      let part = suffixOfWidth(parts[i], width);
-      const wasTruncated = part.length < parts[i].length;
-      if (wasTruncated && parts[i].length > 0) {
-        // Add ellipsis if we are truncating.
-        part = '\u2026' + suffixOfWidth(parts[i], width - 1);
-      }
-      taken.push(part);
-      width -= stringWidth(part);
-    }
-  }
-  return taken.reverse().join('');
 }
 
 function resolveFromEnv(name: string): string | undefined {

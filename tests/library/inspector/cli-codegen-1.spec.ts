@@ -91,10 +91,8 @@ await page.GetByRole(AriaRole.Button, new() { Name = "Submit" }).DblClickAsync()
     ]);
   });
 
-  test('should click twice', async ({ openRecorder, headless }) => {
-    test.skip(!headless, 'real mouse moves sneak between two clicks, moving away from the button');
-
-    const { page, recorder } = await openRecorder();
+  test('should click twice', async ({ openRecorder }) => {
+    const { recorder } = await openRecorder();
 
     await recorder.setContentAndWait(`<button onclick="console.log('click')">Submit</button>`);
 
@@ -104,14 +102,13 @@ await page.GetByRole(AriaRole.Button, new() { Name = "Submit" }).DblClickAsync()
     await Promise.all([
       recorder.waitForOutput('JavaScript', 'click'),
       recorder.trustedClick(),
+      recorder.waitForActionPerformed(),
     ]);
-
-    // Do not trigger double click.
-    await page.waitForTimeout(3000);
 
     const [sources] = await Promise.all([
       recorder.waitForOutput('JavaScript', `click();\n  await`),
       recorder.trustedClick(),
+      recorder.waitForActionPerformed(),
     ]);
 
     expect(sources.get('JavaScript')!.text).toContain(`
@@ -129,14 +126,13 @@ await page.GetByRole(AriaRole.Button, new() { Name = "Submit" }).DblClickAsync()
     await Promise.all([
       recorder.waitForOutput('JavaScript', 'click'),
       recorder.trustedClick(),
+      recorder.waitForActionPerformed(),
     ]);
-
-    // Do not trigger double click.
-    await page.waitForTimeout(3000);
 
     await Promise.all([
       recorder.waitForOutput('JavaScript', `click();\n  await`),
       recorder.trustedClick(),
+      recorder.waitForActionPerformed(),
     ]);
 
     await page.keyboard.type('bar');
@@ -1061,8 +1057,9 @@ await page.GetByRole(AriaRole.Button, new() { Name = "Submit" }).ClickAsync();`)
     await Promise.all([
       recorder.waitForOutput('JavaScript', 'click'),
       page.locator('button').click(),
+      recorder.waitForActionPerformed(),
     ]);
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(600);  // See "signalThreshold" is signal processor.
     await page.goto(server.PREFIX + `/empty.html`);
     await recorder.waitForOutput('JavaScript', `await page.goto('${server.PREFIX}/empty.html');`);
   });
@@ -1073,15 +1070,17 @@ await page.GetByRole(AriaRole.Button, new() { Name = "Submit" }).ClickAsync();`)
     await Promise.all([
       recorder.waitForOutput('JavaScript', 'fill'),
       page.locator('textarea').fill('Hello world'),
+      recorder.waitForActionPerformed(),
     ]);
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(600);  // See "signalThreshold" is signal processor.
     await page.goto(server.PREFIX + `/empty.html`);
     await recorder.waitForOutput('JavaScript', `await page.goto('${server.PREFIX}/empty.html');`);
   });
 
   test('should not throw csp directive violation errors', async ({ openRecorder, server }) => {
+    server.setCSP('/empty.html', `default-src 'self'`);
     const { page } = await openRecorder();
-    await page.goto(server.PREFIX + '/csp.html');
+    await page.goto(server.EMPTY_PAGE);
     const predicate = (msg: ConsoleMessage) => msg.type() === 'error' && /Content[\- ]Security[\- ]Policy/i.test(msg.text());
     await expect(page.waitForEvent('console', { predicate, timeout: 1000 })).rejects.toThrow();
   });

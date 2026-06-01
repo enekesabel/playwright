@@ -15,6 +15,7 @@
  */
 
 import fs from 'fs';
+import path from 'path';
 import { test, expect } from './cli-fixtures';
 
 test('user-data-dir', async ({ cli, server }, testInfo) => {
@@ -63,30 +64,32 @@ test('config-print prints merged config from file, env and cli', async ({ cli, s
   };
   await fs.promises.writeFile(testInfo.outputPath('.playwright', 'cli.config.json'), JSON.stringify(fileConfig, null, 2));
 
-  // Env var overrides navigation timeout (30000 from file → 45000 from env).
   const env = { PLAYWRIGHT_MCP_TIMEOUT_NAVIGATION: '45000' };
-
-  // CLI arg: --in-memory sets browser.isolated = true.
-  await cli('open', '--in-memory', server.PREFIX, { env });
-
-  // Query the resolved config from the running daemon.
+  await cli('open', server.PREFIX, { env });
   const { output } = await cli('config-print', { env });
   const configBegin = output.indexOf('{');
   expect(configBegin).not.toBe(-1);
   const config = JSON.parse(output.slice(configBegin));
-
-  // From Playwright cli defaults.
   expect(config.browser.launchOptions.headless).toBe(true);
-
-  // From config file.
   expect(config.browser.contextOptions.viewport).toEqual({ width: 800, height: 600 });
   expect(config.timeouts.action).toBe(10000);
-
-  // Env var overrides file value.
   expect(config.timeouts.navigation).toBe(45000);
-
-  // From CLI arg (--in-memory).
   expect(config.browser.isolated).toBe(true);
+});
+
+test('context options with UTF-8 BOM', async ({ cli, server }, testInfo) => {
+  const config = {
+    browser: {
+      contextOptions: {
+        viewport: { width: 800, height: 600 },
+      },
+    },
+  };
+  // Write config with UTF-8 BOM prefix, as some Windows editors (Notepad, PowerShell) do.
+  await fs.promises.writeFile(testInfo.outputPath('.playwright', 'cli.config.json'), '\uFEFF' + JSON.stringify(config, null, 2));
+  await cli('open', server.PREFIX);
+  const { output } = await cli('eval', 'window.innerWidth + "x" + window.innerHeight');
+  expect(output).toContain('800x600');
 });
 
 test('isolated', async ({ cli, server }, testInfo) => {
@@ -98,4 +101,46 @@ test('isolated', async ({ cli, server }, testInfo) => {
   await fs.promises.writeFile(testInfo.outputPath('.playwright', 'cli.config.json'), JSON.stringify(config, null, 2));
   await cli('open', server.PREFIX);
   expect(fs.existsSync(testInfo.outputPath('daemon', 'default-user-data'))).toBe(false);
+});
+
+test('global config', async ({ cli, server }, testInfo) => {
+  const fakeHome = testInfo.outputPath('home');
+  await fs.promises.mkdir(path.join(fakeHome, '.playwright'), { recursive: true });
+  await fs.promises.writeFile(path.join(fakeHome, '.playwright', 'cli.config.json'), JSON.stringify({
+    browser: {
+      contextOptions: {
+        viewport: { width: 800, height: 600 },
+      },
+    },
+  }, null, 2));
+
+  const env = { PWTEST_CLI_GLOBAL_CONFIG: fakeHome };
+  await cli('open', server.PREFIX, { env });
+  const { output } = await cli('eval', 'window.innerWidth + "x" + window.innerHeight', { env });
+  expect(output).toContain('800x600');
+});
+
+test('project config overrides global config', async ({ cli, server }, testInfo) => {
+  const fakeHome = testInfo.outputPath('home');
+  await fs.promises.mkdir(path.join(fakeHome, '.playwright'), { recursive: true });
+  await fs.promises.writeFile(path.join(fakeHome, '.playwright', 'cli.config.json'), JSON.stringify({
+    browser: {
+      contextOptions: {
+        viewport: { width: 800, height: 600 },
+      },
+    },
+  }, null, 2));
+
+  await fs.promises.writeFile(testInfo.outputPath('.playwright', 'cli.config.json'), JSON.stringify({
+    browser: {
+      contextOptions: {
+        viewport: { width: 1024, height: 768 },
+      },
+    },
+  }, null, 2));
+
+  const env = { PWTEST_CLI_GLOBAL_CONFIG: fakeHome };
+  await cli('open', server.PREFIX, { env });
+  const { output } = await cli('eval', 'window.innerWidth + "x" + window.innerHeight', { env });
+  expect(output).toContain('1024x768');
 });

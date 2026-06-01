@@ -22,7 +22,7 @@ import { pipeline } from 'stream';
 import zlib from 'zlib';
 import { contextTest as it, expect } from '../config/browserTest';
 import { suppressCertificateWarning } from '../config/utils';
-import { kTargetClosedErrorMessage } from 'tests/config/errors';
+import { kTargetClosedErrorMessage } from '../config/errors';
 
 it.skip(({ mode }) => mode !== 'default');
 
@@ -1256,7 +1256,7 @@ it('should abort requests when browser context closes', async ({ contextFactory,
     server.waitForRequest('/empty.html').then(() => context.close())
   ]);
   expect(error instanceof Error).toBeTruthy();
-  expect(error.message).toContain(kTargetClosedErrorMessage);
+  expect(error.message).toMatch(/Request context disposed|Target page, context or browser has been closed/);
   await connectionClosed;
 });
 
@@ -1323,7 +1323,7 @@ it('fetch should not throw on long set-cookie value', async ({ context, server }
   expect(cookies.map(c => c.name)).toContain('bar');
 });
 
-it('should support set-cookie with SameSite and without Secure attribute over HTTP', async ({ page, server, browserName, isWindows, isLinux, channel }) => {
+it('should support set-cookie with SameSite and without Secure attribute over HTTP', async ({ page, server, browserName, isWindows, isLinux, channel, isBidi }) => {
   for (const value of ['None', 'Lax', 'Strict']) {
     await it.step(`SameSite=${value}`, async () => {
       server.setRoute('/empty.html', (req, res) => {
@@ -1332,7 +1332,7 @@ it('should support set-cookie with SameSite and without Secure attribute over HT
       });
       await page.request.get(server.EMPTY_PAGE);
       const [cookie] = await page.context().cookies();
-      if (browserName === 'chromium' && value === 'None')
+      if ((browserName === 'chromium' || isBidi) && value === 'None')
         expect(cookie).toBeFalsy();
       else if (browserName === 'webkit' && (isLinux || channel === 'webkit-wsl') && value === 'None')
         expect(cookie).toBeFalsy();
@@ -1400,4 +1400,63 @@ it('should retry on ECONNRESET', {
   expect(response.status()).toBe(200);
   expect(await response.text()).toBe('Hello!');
   expect(requestCount).toBe(4);
+});
+
+it('should retry ECONNRESET on compressed response', async ({ context, server }) => {
+  let requestCount = 0;
+  server.setRoute('/test-gzip', (req, res) => {
+    if (requestCount++ < 2) {
+      req.socket.destroy();
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Encoding': 'gzip',
+      'Content-Type': 'text/plain',
+    });
+    const gzipStream = zlib.createGzip();
+    pipeline(gzipStream, res, err => {
+      if (err)
+        console.log(`Server error: ${err}`);
+    });
+    gzipStream.write('compressed-retry-ok');
+    gzipStream.end();
+  });
+  const response = await context.request.get(server.PREFIX + '/test-gzip', { maxRetries: 3 });
+  expect(response.status()).toBe(200);
+  expect(await response.text()).toBe('compressed-retry-ok');
+  expect(requestCount).toBe(3);
+});
+
+it('should retry ECONNRESET mid-stream during gzip decompression', async ({ context, server }) => {
+  let requestCount = 0;
+  server.setRoute('/test-gzip-midstream', (req, res) => {
+    requestCount++;
+    if (requestCount <= 2) {
+      // Send response headers to make client enter the decompression pipeline,
+      // then destroy the socket. This exercises the fix: without it, the
+      // pipeline error callback wraps the error, stripping .code for retry.
+      res.writeHead(200, {
+        'Content-Encoding': 'gzip',
+        'Content-Type': 'text/plain',
+      });
+      res.flushHeaders();
+      req.socket.destroy();
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Encoding': 'gzip',
+      'Content-Type': 'text/plain',
+    });
+    const gzipStream = zlib.createGzip();
+    pipeline(gzipStream, res, err => {
+      if (err)
+        console.log(`Server error: ${err}`);
+    });
+    gzipStream.write('midstream-retry-ok');
+    gzipStream.end();
+  });
+  const response = await context.request.get(server.PREFIX + '/test-gzip-midstream', { maxRetries: 3 });
+  expect(response.status()).toBe(200);
+  expect(await response.text()).toBe('midstream-retry-ok');
+  expect(requestCount).toBe(3);
 });

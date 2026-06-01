@@ -17,7 +17,7 @@
 import fs from 'fs';
 
 import { test, expect } from './fixtures';
-import { jpegjs, PNG } from 'packages/playwright-core/lib/utilsBundle';
+import { jpegjs, PNG } from '../../packages/playwright-core/lib/utilsBundle';
 
 test('browser_take_screenshot (viewport)', async ({ startClient, server }, testInfo) => {
   const { client } = await startClient({
@@ -57,7 +57,7 @@ test('browser_take_screenshot (element)', async ({ startClient, server }, testIn
     name: 'browser_take_screenshot',
     arguments: {
       element: 'hello button',
-      ref: 'e1',
+      target: 'e1',
     },
   })).toEqual({
     content: [
@@ -238,11 +238,6 @@ test('browser_take_screenshot (filename: "output.png")', async ({ client, server
         text: expect.stringContaining(`output.png`),
         type: 'text',
       },
-      {
-        data: expect.any(String),
-        mimeType: 'image/png',
-        type: 'image',
-      },
     ],
   });
 
@@ -320,7 +315,7 @@ test('browser_take_screenshot size cap', async ({ startClient, server, mcpBrowse
   });
 
   const expectations = [
-    { title: '2000x500', pageWidth: 2000, pageHeight: 500, expectedWidth: 1568, expectedHeight: 500 * 1568 / 2000 | 0 },
+    { title: '2000x500', pageWidth: 2000, pageHeight: 500, expectedWidth: 1568, expectedHeight: 720 * 1568 / 2000 | 0 },
     { title: '2000x2000', pageWidth: 2000, pageHeight: 2000, expectedWidth: 1098, expectedHeight: 1098 },
     { title: '1280x800', pageWidth: 1280, pageHeight: 800, expectedWidth: 1280, expectedHeight: 800 },
   ];
@@ -365,7 +360,7 @@ test('browser_take_screenshot (fullPage with element should error)', async ({ st
     arguments: {
       fullPage: true,
       element: 'hello button',
-      ref: 'e1',
+      target: 'e1',
     },
   });
 

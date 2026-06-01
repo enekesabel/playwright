@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-import type { APIRequestContext, Browser, BrowserContext, BrowserContextOptions, Page, PageAgent, LaunchOptions, ViewportSize, Geolocation, HTTPCredentials, Locator, APIResponse, PageScreenshotOptions } from 'playwright-core';
+import type { APIRequestContext, Browser, BrowserContext, BrowserContextOptions, Page, LaunchOptions, ViewportSize, Geolocation, HTTPCredentials, Locator, APIResponse, PageScreenshotOptions } from 'playwright-core';
 export * from 'playwright-core';
 
 export type BlobReporterOptions = { outputDir?: string, fileName?: string };
-export type ListReporterOptions = { printSteps?: boolean };
-export type JUnitReporterOptions = { outputFile?: string, stripANSIControlSequences?: boolean, includeProjectInTestName?: boolean };
+export type ListReporterOptions = { printSteps?: boolean, printFailuresInline?: boolean };
+export type JUnitReporterOptions = { outputFile?: string, stripANSIControlSequences?: boolean, includeProjectInTestName?: boolean, includeRetries?: boolean };
 export type JsonReporterOptions = { outputFile?: string };
 export type HtmlReporterOptions = {
   outputFolder?: string;
@@ -30,6 +30,7 @@ export type HtmlReporterOptions = {
   title?: string;
   noSnippets?: boolean;
   noCopyPrompt?: boolean;
+  doNotInlineAssets?: boolean;
 };
 
 export type ReporterDescription = Readonly<
@@ -49,6 +50,7 @@ type UseOptions<TestArgs, WorkerArgs> = Partial<WorkerArgs> & Partial<TestArgs>;
 
 interface TestProject<TestArgs = {}, WorkerArgs = {}> {
   use?: UseOptions<TestArgs, WorkerArgs>;
+  webServer?: TestConfigWebServer | TestConfigWebServer[];
 }
 
 export interface Project<TestArgs = {}, WorkerArgs = {}> extends TestProject<TestArgs, WorkerArgs> {
@@ -99,7 +101,7 @@ export type TestDetails = {
   annotation?: TestDetailsAnnotation | TestDetailsAnnotation[];
 }
 
-type TestBody<TestArgs> = (args: TestArgs, testInfo: TestInfo) => Promise<void> | void;
+type TestBody<TestArgs> = (args: TestArgs, testInfo: TestInfo) => Promise<unknown> | unknown;
 type ConditionBody<TestArgs> = (args: TestArgs) => boolean;
 
 export interface TestType<TestArgs extends {}, WorkerArgs extends {}> {
@@ -171,6 +173,8 @@ export interface TestType<TestArgs extends {}, WorkerArgs extends {}> {
     only(title: string, body: TestBody<TestArgs & WorkerArgs>): void;
     only(title: string, details: TestDetails, body: TestBody<TestArgs & WorkerArgs>): void;
   }
+
+  abort(message?: string): never;
 
   slow(): void;
   slow(condition: boolean, description?: string): void;
@@ -259,33 +263,13 @@ export interface PlaywrightWorkerOptions {
   connectOptions: ConnectOptions | undefined;
   screenshot: ScreenshotMode | { mode: ScreenshotMode } & Pick<PageScreenshotOptions, 'fullPage' | 'omitBackground'>;
   trace: TraceMode | /** deprecated */ 'retry-with-trace' | { mode: TraceMode, snapshots?: boolean, screenshots?: boolean, sources?: boolean, attachments?: boolean };
-  video: VideoMode | /** deprecated */ 'retry-with-video' | { mode: VideoMode, size?: ViewportSize };
+  video: VideoMode | /** deprecated */ 'retry-with-video' | { mode: VideoMode, size?: ViewportSize, show?: { actions?: { duration?: number, position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right', fontSize?: number }, test?: { level?: 'file' | 'title' | 'step', position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right', fontSize?: number } } };
 }
 
 export type ScreenshotMode = 'off' | 'on' | 'only-on-failure' | 'on-first-failure';
-export type TraceMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry' | 'on-all-retries' | 'retain-on-first-failure';
+export type TraceMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry' | 'on-all-retries' | 'retain-on-first-failure' | 'retain-on-failure-and-retries' | 'retain-all-failures';
 export type VideoMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry';
-export type AgentOptions = {
-  provider?: {
-    api: 'openai' | 'openai-compatible' | 'anthropic' | 'google';
-    apiEndpoint?: string;
-    apiKey: string;
-    apiTimeout?: number;
-    model: string;
-  },
-  limits?: {
-    maxTokens?: number;
-    maxActions?: number;
-    maxActionRetries?: number;
-  };
-  cachePathTemplate?: string;
-  runAgents?: 'all' | 'missing' | 'none';
-  secrets?: { [key: string]: string };
-  systemPrompt?: string;
-};
-
 export interface PlaywrightTestOptions {
-  agentOptions: AgentOptions | undefined;
   acceptDownloads: boolean;
   bypassCSP: boolean;
   colorScheme: ColorScheme;
@@ -324,7 +308,6 @@ export interface PlaywrightTestArgs {
   context: BrowserContext;
   page: Page;
   request: APIRequestContext;
-  agent: PageAgent;
 }
 
 type ExcludeProps<A, B> = {
@@ -337,7 +320,7 @@ export type PlaywrightTestConfig<TestArgs = {}, WorkerArgs = {}> = Config<Playwr
 
 // Use the global URLPattern type if available (Node.js 22+, modern browsers),
 // otherwise fall back to `never` so it disappears from union types.
-type URLPattern = typeof globalThis extends { URLPattern: infer T } ? T : never;
+type URLPattern = typeof globalThis extends { URLPattern: new (...args: any) => infer T } ? T : never;
 type AsymmetricMatcher = Record<string, any>;
 
 interface AsymmetricMatchers {
@@ -353,6 +336,8 @@ interface AsymmetricMatchers {
 
 interface GenericAssertions<R> {
   not: GenericAssertions<R>;
+  resolves: GenericAssertions<R>;
+  rejects: GenericAssertions<R>;
   toBe(expected: unknown): R;
   toBeCloseTo(expected: number, numDigits?: number): R;
   toBeDefined(): R;
@@ -402,13 +387,6 @@ type FunctionAssertions = {
    */
   toPass(options?: { timeout?: number, intervals?: number[] }): Promise<void>;
 };
-
-type CSSStyleProperties = { [k in Exclude<keyof CSSStyleDeclaration, 'parentRule' | number>]?: CSSStyleDeclaration[k] extends Function ? never : CSSStyleDeclaration[k] };
-
-interface LocatorAssertions {
-  toHaveCSS(name: string, value: string|RegExp, options?: { timeout?: number }): Promise<void>;
-  toHaveCSS(values: CSSStyleProperties, options?: { timeout?: number }): Promise<void>;
-}
 
 type BaseMatchers<R, T> = GenericAssertions<R> & PlaywrightTest.Matchers<R, T> & SnapshotAssertions;
 type AllowedGenericMatchers<R, T> = PlaywrightTest.Matchers<R, T> & Pick<GenericAssertions<R>, 'toBe' | 'toBeDefined' | 'toBeFalsy' | 'toBeNull' | 'toBeTruthy' | 'toBeUndefined'>;
@@ -504,7 +482,7 @@ type PollMatchers<R, T, ExtendedMatchers> = {
 
 export type Expect<ExtendedMatchers = {}> = {
   <T = unknown>(actual: T, messageOrOptions?: string | { message?: string }): MakeMatchers<void, T, ExtendedMatchers>;
-  soft: <T = unknown>(actual: T, messageOrOptions?: string | { message?: string }) => MakeMatchers<void, T, ExtendedMatchers>;
+  soft: Expect<ExtendedMatchers>;
   poll: <T = unknown>(actual: () => T | Promise<T>, messageOrOptions?: string | { message?: string, timeout?: number, intervals?: number[] }) => PollMatchers<Promise<void>, T, ExtendedMatchers>;
   extend<MoreMatchers extends Record<string, (this: ExpectMatcherState, receiver: any, ...args: any[]) => MatcherReturnType | Promise<MatcherReturnType>>>(matchers: MoreMatchers): Expect<ExtendedMatchers & MoreMatchers>;
   configure: (configuration: {

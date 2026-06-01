@@ -37,9 +37,11 @@ type AriaRef = {
 let lastRef = 0;
 
 export type AriaTreeOptions = {
-  mode: 'ai' | 'expect' | 'codegen' | 'autoexpect';
+  mode: 'ai' | 'default' | 'codegen' | 'autoexpect';
   refPrefix?: string;
   doNotRenderActive?: boolean;
+  depth?: number;
+  boxes?: boolean;
 };
 
 type InternalOptions = {
@@ -50,9 +52,11 @@ type InternalOptions = {
   renderCursorPointer?: boolean,
   renderActive?: boolean,
   renderStringsAsRegex?: boolean,
+  renderBoxes?: boolean,
 };
 
 function toInternalOptions(options: AriaTreeOptions): InternalOptions {
+  const renderBoxes = options.boxes;
   if (options.mode === 'ai') {
     // For AI consumption.
     return {
@@ -62,18 +66,19 @@ function toInternalOptions(options: AriaTreeOptions): InternalOptions {
       includeGenericRole: true,
       renderActive: !options.doNotRenderActive,
       renderCursorPointer: true,
+      renderBoxes,
     };
   }
   if (options.mode === 'autoexpect') {
     // To auto-generate assertions on visible elements.
-    return { visibility: 'ariaAndVisible', refs: 'none' };
+    return { visibility: 'ariaAndVisible', refs: 'none', renderBoxes };
   }
   if (options.mode === 'codegen') {
     // To generate aria assertion with regex heurisitcs.
-    return { visibility: 'aria', refs: 'none', renderStringsAsRegex: true };
+    return { visibility: 'aria', refs: 'none', renderStringsAsRegex: true, renderBoxes };
   }
   // To match aria snapshot.
-  return { visibility: 'aria', refs: 'none' };
+  return { visibility: 'aria', refs: 'none', renderBoxes };
 }
 
 export function generateAriaTree(rootElement: Element, publicOptions: AriaTreeOptions): AriaSnapshot {
@@ -265,6 +270,11 @@ function toAriaNode(element: Element, options: InternalOptions): aria.AriaNode |
   if (roleUtils.kAriaExpandedRoles.includes(role))
     result.expanded = roleUtils.getAriaExpanded(element);
 
+  if (roleUtils.kAriaInvalidRoles.includes(role)) {
+    const invalid = roleUtils.getAriaInvalid(element);
+    result.invalid = invalid === 'false' ? false : invalid === 'true' ? true : invalid;
+  }
+
   if (roleUtils.kAriaLevelRoles.includes(role))
     result.level = roleUtils.getAriaLevel(element);
 
@@ -386,19 +396,19 @@ export type MatcherReceived = {
 };
 
 export function matchesExpectAriaTemplate(rootElement: Element, template: aria.AriaTemplateNode): { matches: aria.AriaNode[], received: MatcherReceived } {
-  const snapshot = generateAriaTree(rootElement, { mode: 'expect' });
+  const snapshot = generateAriaTree(rootElement, { mode: 'default' });
   const matches = matchesNodeDeep(snapshot.root, template, false, false);
   return {
     matches,
     received: {
-      raw: renderAriaTree(snapshot, { mode: 'expect' }),
-      regex: renderAriaTree(snapshot, { mode: 'codegen' }),
+      raw: renderAriaTree(snapshot, { mode: 'default' }).text,
+      regex: renderAriaTree(snapshot, { mode: 'codegen' }).text,
     }
   };
 }
 
 export function getAllElementsMatchingExpectAriaTemplate(rootElement: Element, template: aria.AriaTemplateNode): Element[] {
-  const root = generateAriaTree(rootElement, { mode: 'expect' }).root;
+  const root = generateAriaTree(rootElement, { mode: 'default' }).root;
   const matches = matchesNodeDeep(root, template, true, false);
   return matches.map(n => ariaNodeElement(n));
 }
@@ -417,6 +427,8 @@ function matchesNode(node: aria.AriaNode | string, template: aria.AriaTemplateNo
   if (template.disabled !== undefined && template.disabled !== node.disabled)
     return false;
   if (template.expanded !== undefined && template.expanded !== node.expanded)
+    return false;
+  if (template.invalid !== undefined && template.invalid !== node.invalid)
     return false;
   if (template.level !== undefined && template.level !== node.level)
     return false;
@@ -563,9 +575,14 @@ function filterSnapshotDiff(nodes: (aria.AriaNode | string)[], statusMap: Map<ar
   return result;
 }
 
-export function renderAriaTree(ariaSnapshot: AriaSnapshot, publicOptions: AriaTreeOptions, previousSnapshot?: AriaSnapshot): string {
+function indent(depth: number): string {
+  return '  '.repeat(depth);
+}
+
+export function renderAriaTree(ariaSnapshot: AriaSnapshot, publicOptions: AriaTreeOptions, previousSnapshot?: AriaSnapshot): { text: string, iframeDepths: Record<string, number> } {
   const options = toInternalOptions(publicOptions);
   const lines: string[] = [];
+  const iframeDepths: Record<string, number> = {};
   const includeText = options.renderStringsAsRegex ? textContributesInfo : () => true;
   const renderString = options.renderStringsAsRegex ? convertToBestGuessRegex : (str: string) => str;
 
@@ -576,10 +593,12 @@ export function renderAriaTree(ariaSnapshot: AriaSnapshot, publicOptions: AriaTr
   if (previousSnapshot)
     nodesToRender = filterSnapshotDiff(nodesToRender, statusMap);
 
-  const visitText = (text: string, indent: string) => {
+  const visitText = (text: string, depth: number) => {
+    if (publicOptions.depth && depth > publicOptions.depth)
+      return;
     const escaped = yamlEscapeValueIfNeeded(renderString(text));
     if (escaped)
-      lines.push(indent + '- text: ' + escaped);
+      lines.push(indent(depth) + '- text: ' + escaped);
   };
 
   const createKey = (ariaNode: aria.AriaNode, renderCursorPointer: boolean): string => {
@@ -602,6 +621,10 @@ export function renderAriaTree(ariaSnapshot: AriaSnapshot, publicOptions: AriaTr
       key += ` [expanded]`;
     if (ariaNode.active && options.renderActive)
       key += ` [active]`;
+    if (ariaNode.invalid === 'grammar' || ariaNode.invalid === 'spelling')
+      key += ` [invalid=${ariaNode.invalid}]`;
+    if (ariaNode.invalid === true)
+      key += ` [invalid]`;
     if (ariaNode.level)
       key += ` [level=${ariaNode.level}]`;
     if (ariaNode.pressed === 'mixed')
@@ -616,6 +639,13 @@ export function renderAriaTree(ariaSnapshot: AriaSnapshot, publicOptions: AriaTr
       if (renderCursorPointer && aria.hasPointerCursor(ariaNode))
         key += ' [cursor=pointer]';
     }
+    if (options.renderBoxes) {
+      const element = ariaNodeElement(ariaNode);
+      if (element) {
+        const r = element.getBoundingClientRect();
+        key += ` [box=${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}]`;
+      }
+    }
     return key;
   };
 
@@ -623,19 +653,27 @@ export function renderAriaTree(ariaSnapshot: AriaSnapshot, publicOptions: AriaTr
     return ariaNode?.children.length === 1 && typeof ariaNode.children[0] === 'string' && !Object.keys(ariaNode.props).length ? ariaNode.children[0] : undefined;
   };
 
-  const visit = (ariaNode: aria.AriaNode, indent: string, renderCursorPointer: boolean) => {
+  const visit = (ariaNode: aria.AriaNode, depth: number, renderCursorPointer: boolean) => {
+    if (publicOptions.depth && depth > publicOptions.depth)
+      return;
+
+    if (ariaNode.role === 'iframe' && ariaNode.ref)
+      iframeDepths[ariaNode.ref] = depth;
+
     // Replace the whole subtree with a single reference when possible.
     if (statusMap.get(ariaNode) === 'same' && ariaNode.ref) {
-      lines.push(indent + `- ref=${ariaNode.ref} [unchanged]`);
+      lines.push(indent(depth) + `- ref=${ariaNode.ref} [unchanged]`);
       return;
     }
 
     // When producing a diff, add <changed> marker to all diff roots.
-    const isDiffRoot = !!previousSnapshot && !indent;
-    const escapedKey = indent + '- ' + (isDiffRoot ? '<changed> ' : '') + yamlEscapeKeyIfNeeded(createKey(ariaNode, renderCursorPointer));
+    const isDiffRoot = !!previousSnapshot && !depth;
+    const escapedKey = indent(depth) + '- ' + (isDiffRoot ? '<changed> ' : '') + yamlEscapeKeyIfNeeded(createKey(ariaNode, renderCursorPointer));
     const singleInlinedTextChild = getSingleInlinedTextChild(ariaNode);
+    const isAtDepthLimit = !!publicOptions.depth && depth === publicOptions.depth;
+    const hasNoChildren = !singleInlinedTextChild && (!ariaNode.children.length || isAtDepthLimit);
 
-    if (!ariaNode.children.length && !Object.keys(ariaNode.props).length) {
+    if (hasNoChildren && !Object.keys(ariaNode.props).length) {
       // Leaf node without children.
       lines.push(escapedKey);
     } else if (singleInlinedTextChild !== undefined) {
@@ -649,26 +687,25 @@ export function renderAriaTree(ariaSnapshot: AriaSnapshot, publicOptions: AriaTr
       // Node with (optional) props and some children.
       lines.push(escapedKey + ':');
       for (const [name, value] of Object.entries(ariaNode.props))
-        lines.push(indent + '  - /' + name + ': ' + yamlEscapeValueIfNeeded(value));
+        lines.push(indent(depth + 1) + '- /' + name + ': ' + yamlEscapeValueIfNeeded(value));
 
-      const childIndent = indent + '  ';
       const inCursorPointer = !!ariaNode.ref && renderCursorPointer && aria.hasPointerCursor(ariaNode);
       for (const child of ariaNode.children) {
         if (typeof child === 'string')
-          visitText(includeText(ariaNode, child) ? child : '', childIndent);
+          visitText(includeText(ariaNode, child) ? child : '', depth + 1);
         else
-          visit(child, childIndent, renderCursorPointer && !inCursorPointer);
+          visit(child, depth + 1, renderCursorPointer && !inCursorPointer);
       }
     }
   };
 
   for (const nodeToRender of nodesToRender) {
     if (typeof nodeToRender === 'string')
-      visitText(nodeToRender, '');
+      visitText(nodeToRender, 0);
     else
-      visit(nodeToRender, '', !!options.renderCursorPointer);
+      visit(nodeToRender, 0, !!options.renderCursorPointer);
   }
-  return lines.join('\n');
+  return { text: lines.join('\n'), iframeDepths };
 }
 
 function convertToBestGuessRegex(text: string): string {
@@ -719,9 +756,6 @@ function textContributesInfo(node: aria.AriaNode, text: string): boolean {
 
   if (!node.name)
     return true;
-
-  if (node.name.length > text.length)
-    return false;
 
   // Figure out if text adds any value. "longestCommonSubstring" is expensive, so limit strings length.
   const substr = (text.length <= 200 && node.name.length <= 200) ? longestCommonSubstring(text, node.name) : '';

@@ -44,7 +44,7 @@ it('should format number', async ({ browser, server }) => {
     await context.close();
   }
   {
-    const context = await browser.newContext({ locale: 'fr-CH' });
+    const context = await browser.newContext({ locale: 'fr-FR' });
     const page = await context.newPage();
     await page.goto(server.EMPTY_PAGE);
     expect(await page.evaluate(() => (1000000.50).toLocaleString().replace(/\s/g, ' '))).toBe('1 000 000,5');
@@ -72,7 +72,7 @@ it('should format date', async ({ browser, server, browserName }) => {
 });
 
 it('should format number in popups', async ({ browser, server }) => {
-  const context = await browser.newContext({ locale: 'fr-CH' });
+  const context = await browser.newContext({ locale: 'fr-FR' });
   const page = await context.newPage();
   await page.goto(server.EMPTY_PAGE);
 
@@ -165,19 +165,19 @@ it('should not change default locale in another context', async ({ browser }) =>
   }
 });
 
-it('should propagate locale to workers', async ({ browser, browserName, server }) => {
-  it.fail(browserName === 'firefox', 'https://github.com/microsoft/playwright/issues/38919');
+it('should propagate locale to workers', async ({ browser, browserName, isBidi, server }) => {
+  it.fail(browserName === 'firefox' && !isBidi, 'https://github.com/microsoft/playwright/issues/38919');
   const context = await browser.newContext({ locale: 'ru-RU' });
   const page = await context.newPage();
   await page.goto(server.EMPTY_PAGE);
   const [msg] = await Promise.all([
-    page.waitForEvent('console'),
-    page.evaluate(() => new Worker(URL.createObjectURL(new Blob(['console.log(Intl.NumberFormat().resolvedOptions().locale)'], { type: 'application/javascript' })))),
+    page.waitForEvent('console', e => e.text().startsWith('locale:')),
+    page.evaluate(() => new Worker(URL.createObjectURL(new Blob(['console.log("locale:" + Intl.NumberFormat().resolvedOptions().locale)'], { type: 'application/javascript' })))),
   ]);
   if (browserName === 'webkit')
-    expect(msg.text()).toContain('ru'); // Webkit on Ubuntu is "ru-RU", and on other platforms is "ru"
+    expect(msg.text()).toContain('locale:ru'); // Webkit on Ubuntu is "ru-RU", and on other platforms is "ru"
   else
-    expect(msg.text()).toBe('ru-RU');
+    expect(msg.text()).toBe('locale:ru-RU');
   await context.close();
 });
 

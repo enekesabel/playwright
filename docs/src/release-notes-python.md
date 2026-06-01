@@ -6,6 +6,264 @@ toc_max_heading_level: 2
 
 import LiteYouTube from '@site/src/components/LiteYouTube';
 
+## Version 1.60
+
+### 🌐 HAR recording on Tracing
+
+[`method: Tracing.startHar`] / [`method: Tracing.stopHar`] expose HAR recording as a first-class tracing API, with the same `content`, `mode` and `url_filter` options as `record_har`:
+
+```python
+context.tracing.start_har("trace.har")
+page = context.new_page()
+page.goto("https://playwright.dev")
+context.tracing.stop_har()
+```
+
+### 🪝 Drop API
+
+New [`method: Locator.drop`] simulates an external drag-and-drop of files or clipboard-like data onto an element. Playwright dispatches `dragenter`, `dragover`, and `drop` with a synthetic [DataTransfer] in the page context — works cross-browser and is great for testing upload zones:
+
+```python
+page.locator("#dropzone").drop(
+    files={"name": "note.txt", "mime_type": "text/plain", "buffer": b"hello"},
+)
+
+page.locator("#dropzone").drop(
+    data={
+        "text/plain": "hello world",
+        "text/uri-list": "https://example.com",
+    },
+)
+```
+
+### 🎯 Aria snapshots
+
+- [`method: PageAssertions.toMatchAriaSnapshot`] now works on a [Page], in addition to a [Locator] — equivalent to asserting against `page.locator("body")`.
+- New `boxes` option on [`method: Locator.ariaSnapshot`] / [`method: Page.ariaSnapshot`] appends each element's bounding box as `[box=x,y,width,height]`, useful for AI consumption.
+
+### New APIs
+
+#### Browser, Context and Page
+
+- Event [`event: Browser.context`] — fired when a new context is created on the browser.
+- [BrowserContext] now mirrors lifecycle events from its pages: [`event: BrowserContext.download`], [`event: BrowserContext.frameAttached`], [`event: BrowserContext.frameDetached`], [`event: BrowserContext.frameNavigated`], [`event: BrowserContext.pageClose`], [`event: BrowserContext.pageLoad`].
+
+#### Locators and Assertions
+
+- New option `description` in [`method: Page.getByRole`] / [`method: Locator.getByRole`] / [`method: Frame.getByRole`] / [`method: FrameLocator.getByRole`] for matching the [accessible description](https://www.w3.org/TR/wai-aria-1.2/#dfn-accessible-description).
+- New option `pseudo` in [`method: LocatorAssertions.toHaveCSS`] reads computed styles from `::before` or `::after`.
+- New option `style` in [`method: Locator.highlight`] applies extra inline CSS to the highlight overlay, plus new [`method: Page.hideHighlight`] to clear all highlights.
+
+#### Network
+
+- [`method: WebSocketRoute.protocols`] returns the WebSocket subprotocols requested by the page.
+- New option `no_defaults` in [`method: BrowserType.connectOverCDP`] disables Playwright's default overrides on the default context (download behavior, focus emulation, media emulation), so attaching to a user's daily-driver browser doesn't disturb its state.
+
+#### Errors
+
+- New [`method: WebError.location`] mirrors [`method: ConsoleMessage.location`].
+- [`method: ConsoleMessage.location`] now exposes `line` / `column` properties (`line_number` / `column_number` are deprecated).
+
+### 🛠️ Other improvements
+
+- Trace Viewer adds a pretty-print toggle for JSON / form request and response bodies in the network details panel.
+
+### Breaking Changes ⚠️
+
+- Removed long-deprecated `handle` option on `BrowserContext.expose_binding` and `Page.expose_binding`.
+
+### Browser Versions
+
+- Chromium 148.0.7778.96
+- Mozilla Firefox 150.0.2
+- WebKit 26.4
+
+This version was also tested against the following stable channels:
+
+- Google Chrome 147
+- Microsoft Edge 147
+
+
+## Version 1.59
+
+### 🎬 Screencast
+
+New [`property: Page.screencast`] API provides a unified interface for capturing page content with:
+- Screencast recordings
+- Action annotations
+- Visual overlays
+- Real-time frame capture
+- Agentic video receipts
+
+<center>
+<img src="https://raw.githubusercontent.com/microsoft/playwright/main/docs/src/images/release-notes-1.59-screencast-demo.gif" alt="Demo" width="500" height="313" />
+</center>
+
+
+**Screencast recording** — record video with precise start/stop control, as an alternative to the [`option: Browser.newContext.recordVideoDir`] option:
+
+```python
+page.screencast.start(path="video.webm")
+# ... perform actions ...
+page.screencast.stop()
+```
+
+**Action annotations** — enable built-in visual annotations that highlight interacted elements and display action titles during recording:
+
+```python
+page.screencast.show_actions(position="top-right")
+```
+
+[`method: Screencast.showActions`] accepts `position` (`'top-left'`, `'top'`, `'top-right'`, `'bottom-left'`, `'bottom'`, `'bottom-right'`), `duration` (ms per annotation), and `font_size` (px). Returns a disposable to stop showing actions.
+
+**Visual overlays** — add chapter titles and custom HTML overlays on top of the page for richer narration:
+
+```python
+page.screencast.show_chapter("Adding TODOs",
+    description="Type and press enter for each TODO",
+    duration=1000,
+)
+
+page.screencast.show_overlay('<div style="color: red">Recording</div>')
+```
+
+**Real-time frame capture** — stream JPEG-encoded frames for custom processing like thumbnails, live previews, AI vision, and more:
+
+```python
+page.screencast.start(
+    on_frame=lambda frame: send_to_vision_model(frame["data"]),
+)
+```
+
+**Agentic video receipts** — coding agents can produce video evidence of their work. After completing a task, an agent can record a walkthrough video with rich annotations for human review:
+
+```python
+page.screencast.start(path="receipt.webm")
+page.screencast.show_actions(position="top-right")
+
+page.screencast.show_chapter("Verifying checkout flow",
+    description="Added coupon code support per ticket #1234",
+)
+
+# Agent performs the verification steps...
+page.locator("#coupon").fill("SAVE20")
+page.locator("#apply-coupon").click()
+expect(page.locator(".discount")).to_contain_text("20%")
+
+page.screencast.show_chapter("Done",
+    description="Coupon applied, discount reflected in total",
+)
+
+page.screencast.stop()
+```
+
+The resulting video serves as a receipt: chapter titles provide context, action annotations highlight each interaction, and the visual walkthrough is faster to review than text logs.
+
+### 🔍 Snapshots and Locators
+
+- Method [`method: Page.ariaSnapshot`] to capture the aria snapshot of the page — equivalent to `page.locator('body').aria_snapshot()`.
+- Options `depth` and `mode` in [`method: Locator.ariaSnapshot`].
+- Method [`method: Locator.normalize`] converts a locator to follow best practices like test ids and aria roles.
+- Method [`method: Page.pickLocator`] enters an interactive mode where hovering over elements highlights them and shows the corresponding locator. Click an element to get its [Locator] back. Use [`method: Page.cancelPickLocator`] to cancel.
+
+### New APIs
+
+#### Screencast
+
+- [`property: Page.screencast`] provides video recording, real-time frame streaming, and overlay management.
+- Methods [`method: Screencast.start`] and [`method: Screencast.stop`] for recording and frame capture.
+- Methods [`method: Screencast.showActions`] and [`method: Screencast.hideActions`] for action annotations.
+- Methods [`method: Screencast.showChapter`] and [`method: Screencast.showOverlay`] for visual overlays.
+- Methods [`method: Screencast.showOverlays`] and [`method: Screencast.hideOverlays`] for overlay visibility control.
+
+#### Storage, Console and Errors
+
+- Method [`method: BrowserContext.setStorageState`] clears existing cookies, local storage, and IndexedDB for all origins and sets a new storage state — no need to create a new context.
+- Methods [`method: Page.clearConsoleMessages`] and [`method: Page.clearPageErrors`] to clear stored messages and errors.
+- Option `filter` in [`method: Page.consoleMessages`] and [`method: Page.pageErrors`] controls which messages are returned.
+- Method [`method: ConsoleMessage.timestamp`].
+
+#### Miscellaneous
+
+- [`property: BrowserContext.debugger`] provides programmatic control over the Playwright debugger.
+- Method [`method: BrowserContext.isClosed`].
+- Method [`method: Request.existingResponse`] returns the response without waiting.
+- Method [`method: Response.httpVersion`] returns the HTTP version used by the response.
+- Option `live` in [`method: Tracing.start`] for real-time trace updates.
+- Option `artifacts_dir` in [`method: BrowserType.launch`] to configure the artifacts directory.
+
+### 🔗 Interoperability
+
+New [`method: Browser.bind`] API makes a launched browser available for `playwright-cli`, `@playwright/mcp`, and other clients to connect to.
+
+**Bind a browser** — start a browser and bind it so others can connect:
+
+```python
+server_info = await browser.bind("my-session",
+    workspace_dir="/my/project",
+)
+```
+
+**Connect from playwright-cli** — connect to the running browser from your favorite coding agent.
+
+```bash
+playwright-cli attach my-session
+playwright-cli -s my-session snapshot
+```
+
+**Connect from @playwright/mcp** — or point your MCP server to the running browser.
+
+```bash
+@playwright/mcp --endpoint=my-session
+```
+
+**Connect from a Playwright client** — use API to connect to the browser. Multiple clients at a time are supported!
+
+```python
+browser = await chromium.connect(server_info["endpoint"])
+```
+
+Pass `host` and `port` options to bind over WebSocket instead of a named pipe:
+
+```python
+server_info = await browser.bind("my-session",
+    host="localhost",
+    port=0,
+)
+# server_info["endpoint"] is a ws:// URL
+```
+
+Call [`method: Browser.unbind`] to stop accepting new connections.
+
+### 📊 Observability
+
+Run `playwright-cli show` to open the Dashboard that lists all the bound browsers, their statuses, and allows interacting with them:
+- See what your agent is doing on the background browsers
+- Click into the sessions for manual interventions
+- Open DevTools to inspect pages from the background browsers.
+
+<center>
+<img src="https://raw.githubusercontent.com/microsoft/playwright/main/docs/src/images/release-notes-1.59-dashboard.png" alt="Demo" width="1169" height="835" />
+</center>
+
+- `playwright-cli` binds all of its browsers automatically, so you can see what your agents are doing.
+- Pass `PLAYWRIGHT_DASHBOARD=1` env variable to see all `@playwright/test` browsers in the dashboard.
+
+### Breaking Changes ⚠️
+
+- Removed macOS 14 support for WebKit. We recommend upgrading your macOS version, or keeping an older Playwright version.
+
+### Browser Versions
+
+- Chromium 147.0.7727.15
+- Mozilla Firefox 148.0.2
+- WebKit 26.4
+
+This version was also tested against the following stable channels:
+
+- Google Chrome 146
+- Microsoft Edge 146
+
 ## Version 1.58
 
 ### UI Mode and Trace Viewer Improvements
@@ -46,7 +304,7 @@ This version was also tested against the following stable channels:
 
 ### Chrome for Testing
 
-Starting with this release, Playwright switches from Chromium, to using [Chrome for Testing](https://developer.chrome.com/blog/chrome-for-testing/) builds. Both headed and headless browsers are subject to this. Your tests should still be passing after upgrading to Playwright 1.57.
+Playwright now runs on [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) builds rather than Chromium. Headed mode uses `chrome`; headless mode uses `chrome-headless-shell`. Existing tests should continue to pass after upgrading to v1.57.
 
 We're expecting no functional changes to come from this switch. The biggest change is the new icon and title in your toolbar.
 

@@ -97,6 +97,7 @@ A selector to search for an element to drop onto. If there are multiple elements
 
 ## input-position
 - `position` <[Object]>
+  * alias: Position
   - `x` <[float]>
   - `y` <[float]>
 
@@ -127,9 +128,24 @@ Defaults to `left`.
 
 ## input-files
 - `files` <[path]|[Array]<[path]>|[Object]|[Array]<[Object]>>
+  * alias: FilePayload
   - `name` <[string]> File name
   - `mimeType` <[string]> File type
   - `buffer` <[Buffer]> File content
+
+## drop-payload
+- `payload` <[Object]>
+  * alias: DropPayload
+  - `files` ?<[path]|[Array]<[path]>|[Object]|[Array]<[Object]>>
+    * alias: FilePayload
+    - `name` <[string]> File name
+    - `mimeType` <[string]> File type
+    - `buffer` <[Buffer]> File content
+  - `data` ?<[Object]<[string], [string]>>
+
+Data to drop onto the target. Provide `files` (file paths or in-memory buffers), `data`
+(a mime-type → string map for clipboard-like content such as `text/plain`, `text/html`,
+`text/uri-list`), or both.
 
 ## input-down-up-delay
 - `delay` <[float]>
@@ -153,6 +169,7 @@ When set, this method only performs the [actionability](../actionability.md) che
 
 ## input-source-position
 - `sourcePosition` <[Object]>
+  * alias-java: Position
   - `x` <[float]>
   - `y` <[float]>
 
@@ -160,6 +177,7 @@ Clicks on the source element at this point relative to the top-left corner of th
 
 ## input-target-position
 - `targetPosition` <[Object]>
+  * alias-java: Position
   - `x` <[float]>
   - `y` <[float]>
 
@@ -235,6 +253,7 @@ Dangerous option; use with care. Defaults to `false`.
 
 ## browser-option-proxy
 - `proxy` <[Object]>
+  * alias: Proxy
   - `server` <[string]> Proxy to be used for all requests. HTTP and SOCKS proxies are supported, for example
     `http://myproxy.com:3128` or `socks5://myproxy.com:3128`. Short form `myproxy.com:3128` is considered an HTTP
     proxy.
@@ -331,6 +350,7 @@ When using [`method: Page.goto`], [`method: Page.route`], [`method: Page.waitFor
 * langs: js, java
   - alias-java: viewportSize
 - `viewport` <[null]|[Object]>
+  * alias: ViewportSize
   - `width` <[int]> page width in pixels.
   - `height` <[int]> page height in pixels.
 
@@ -364,6 +384,7 @@ It makes the execution of the tests non-deterministic.
   - alias-java: screenSize
   - alias-csharp: screenSize
 - `screen` <[Object]>
+  * alias: ScreenSize
   - `width` <[int]> page width in pixels.
   - `height` <[int]> page height in pixels.
 
@@ -466,11 +487,11 @@ unless explicitly provided.
 
 ## python-fetch-option-form
 * langs: python
-- `form` <[Object]<[string], [string]|[float]|[boolean]>>
+- `form` <[Object]<[string], [string]|[float]|[boolean]>|[FormData]>
 
 Provides an object that will be serialized as html form using `application/x-www-form-urlencoded` encoding and sent as
 this request body. If this parameter is specified `content-type` header will be set to `application/x-www-form-urlencoded`
-unless explicitly provided.
+unless explicitly provided. Use [FormData] to send multiple values for the same field.
 
 ## csharp-fetch-option-form
 * langs: csharp
@@ -496,7 +517,7 @@ or as file-like object containing file name, mime-type and its content.
 
 ## python-fetch-option-multipart
 * langs: python
-- `multipart` <[Object]<[string], [string]|[float]|[boolean]|[ReadStream]|[Object]>>
+- `multipart` <[Object]<[string], [string]|[float]|[boolean]|[ReadStream]|[Object]>|[FormData]>
   - `name` <[string]> File name
   - `mimeType` <[string]> File type
   - `buffer` <[Buffer]> File content
@@ -504,6 +525,7 @@ or as file-like object containing file name, mime-type and its content.
 Provides an object that will be serialized as html form using `multipart/form-data` encoding and sent as
 this request body. If this parameter is specified `content-type` header will be set to `multipart/form-data`
 unless explicitly provided. File values can be passed as file-like object containing file name, mime-type and its content.
+Use [FormData] to send multiple files in the same field.
 
 ## csharp-fetch-option-multipart
 * langs: csharp
@@ -594,6 +616,7 @@ Does not enforce fixed viewport, allows resizing window in the headed mode.
 
 ## context-option-clientCertificates
 - `clientCertificates` <[Array]<[Object]>>
+  * alias: ClientCertificate
   - `origin` <[string]> Exact origin that the certificate is valid for. Origin includes `https` protocol, a hostname and optionally a port.
   - `certPath` ?<[path]> Path to the file with the certificate in PEM format.
   - `cert` ?<[Buffer]> Direct value of the certificate in PEM format.
@@ -648,6 +671,7 @@ for a list of supported timezone IDs. Defaults to the system timezone.
 
 ## context-option-geolocation
 - `geolocation` <[Object]>
+  * alias: Geolocation
   - `latitude` <[float]> Latitude between -90 and 90.
   - `longitude` <[float]> Longitude between -180 and 180.
   - `accuracy` ?<[float]> Non-negative accuracy value. Defaults to `0`.
@@ -675,6 +699,7 @@ Whether to emulate network being offline. Defaults to `false`. Learn more about 
 
 ## context-option-httpcredentials
 - `httpCredentials` <[Object]>
+  * alias: HttpCredentials
   - `username` <[string]>
   - `password` <[string]>
   - `origin` ?<[string]> Restrain sending http credentials on specific origin (scheme://host:port).
@@ -740,18 +765,6 @@ Emulates `'prefers-contrast'` media feature, supported values are `'no-preferenc
 
 Logger sink for Playwright logging.
 
-## context-option-videospath
-* langs: js
-* deprecated: Use [`option: recordVideo`] instead.
-- `videosPath` <[path]>
-
-## context-option-videosize
-* langs: js
-* deprecated: Use [`option: recordVideo`] instead.
-- `videoSize` <[Object]>
-  - `width` <[int]> Video frame width.
-  - `height` <[int]> Video frame height.
-
 ## context-option-recordhar
 * langs: js
 - `recordHar` <[Object]>
@@ -804,12 +817,16 @@ When set to `minimal`, only record information necessary for routing from HAR. T
 ## context-option-recordvideo
 * langs: js
 - `recordVideo` <[Object]>
-  - `dir` <[path]> Path to the directory to put videos into.
+  - `dir` ?<[path]> Path to the directory to put videos into. If not specified, the videos will be stored in `artifactsDir` (see [`method: BrowserType.launch`] options).
   - `size` ?<[Object]> Optional dimensions of the recorded videos. If not specified the size will be equal to `viewport`
     scaled down to fit into 800x800. If `viewport` is not configured explicitly the video size defaults to 800x450.
     Actual picture of each page will be scaled down if necessary to fit the specified size.
     - `width` <[int]> Video frame width.
     - `height` <[int]> Video frame height.
+  - `showActions` ?<[Object]> If specified, enables visual annotations on interacted elements during video recording.
+    - `duration` ?<[float]> How long each annotation is displayed in milliseconds. Defaults to `500`.
+    - `position` ?<[AnnotatePosition]<"top-left"|"top"|"top-right"|"bottom-left"|"bottom"|"bottom-right">> Position of the action title overlay. Defaults to `"top-right"`.
+    - `fontSize` ?<[int]> Font size of the action title in pixels. Defaults to `24`.
 
 Enables video recording for all pages into `recordVideo.dir` directory. If not specified videos are not recorded. Make
 sure to await [`method: BrowserContext.close`] for videos to be saved.
@@ -826,6 +843,7 @@ not recorded. Make sure to call [`method: BrowserContext.close`] for videos to b
 * langs: csharp, java, python
   - alias-python: record_video_size
 - `recordVideoSize` <[Object]>
+  * alias-java: RecordVideoSize
   - `width` <[int]> Video frame width.
   - `height` <[int]> Video frame height.
 
@@ -835,6 +853,7 @@ Actual picture of each page will be scaled down if necessary to fit the specifie
 
 ## context-option-proxy
 - `proxy` <[Object]>
+  * alias: Proxy
   - `server` <[string]> Proxy to be used for all requests. HTTP and SOCKS proxies are supported, for example
     `http://myproxy.com:3128` or `socks5://myproxy.com:3128`. Short form `myproxy.com:3128` is considered an HTTP proxy.
   - `bypass` ?<[string]> Optional comma-separated domains to bypass proxy, for example `".com, chromium.org, .domain.com"`.
@@ -882,6 +901,7 @@ Specifies whether to wait for already running handlers and what to do if they th
 ## select-options-values
 * langs: java, js, csharp
 - `values` <[null]|[string]|[ElementHandle]|[Array]<[string]>|[Object]|[Array]<[ElementHandle]>|[Array]<[Object]>>
+  * alias-java: SelectOption
   - `value` ?<[string]> Matches by `option.value`. Optional.
   - `label` ?<[string]> Matches by `option.label`. Optional.
   - `index` ?<[int]> Matches by the index. Optional.
@@ -1046,8 +1066,6 @@ between the same pixel in compared images, between zero (strict) and one (lax), 
 - %%-context-option-contrast-%%
 - %%-context-option-contrast-csharp-python-%%
 - %%-context-option-logger-%%
-- %%-context-option-videospath-%%
-- %%-context-option-videosize-%%
 - %%-context-option-recordhar-%%
 - %%-context-option-recordhar-path-%%
 - %%-context-option-recordhar-omit-content-%%
@@ -1152,6 +1170,11 @@ Logger sink for Playwright logging.
 Maximum time in milliseconds to wait for the browser instance to start. Defaults to `30000` (30 seconds). Pass `0` to
 disable timeout.
 
+## browser-option-artifactsdir
+- `artifactsDir` <[path]>
+
+If specified, artifacts (traces, videos, downloads, HAR files, etc.) are saved into this directory. The directory is not cleaned up when the browser closes. If not specified, a temporary directory is used and cleaned up when the browser closes.
+
 ## browser-option-tracesdir
 - `tracesDir` <[path]>
 
@@ -1164,6 +1187,7 @@ Slows down Playwright operations by the specified amount of milliseconds. Useful
 
 ## shared-browser-options-list-v1.8
 - %%-browser-option-args-%%
+- %%-browser-option-artifactsdir-%%
 - %%-browser-option-channel-%%
 - %%-browser-option-chromiumsandbox-%%
 - %%-browser-option-downloadspath-%%
@@ -1280,6 +1304,7 @@ When true, takes a screenshot of the full scrollable page, instead of the curren
 
 ## screenshot-option-clip
 - `clip` <[Object]>
+  * alias-java: Clip
   - `x` <[float]> x-coordinate of top-left corner of clip area
   - `y` <[float]> y-coordinate of top-left corner of clip area
   - `width` <[float]> width of clipping area
@@ -1359,6 +1384,14 @@ An attribute that is usually set by `aria-checked` or native `<input type=checkb
 
 Learn more about [`aria-checked`](https://www.w3.org/TR/wai-aria-1.2/#aria-checked).
 
+## locator-get-by-role-option-description
+* since: v1.60
+- `description` <[string]|[RegExp]>
+
+Option to match the [accessible description](https://w3c.github.io/accname/#dfn-accessible-description). By default, matching is case-insensitive and searches for a substring, use [`option: exact`] to control this behavior.
+
+Learn more about [accessible description](https://w3c.github.io/accname/#dfn-accessible-description).
+
 ## locator-get-by-role-option-disabled
 * since: v1.27
 - `disabled` <[boolean]>
@@ -1406,7 +1439,7 @@ Learn more about [accessible name](https://w3c.github.io/accname/#dfn-accessible
 * since: v1.28
 - `exact` <[boolean]>
 
-Whether [`option: name`] is matched exactly: case-sensitive and whole-string. Defaults to false. Ignored when [`option: name`] is a regular expression. Note that exact match still trims whitespace.
+Whether [`option: name`] and [`option: description`] are matched exactly: case-sensitive and whole-string. Defaults to false. Ignored when the value is a regular expression. Note that exact match still trims whitespace.
 
 ## locator-get-by-role-option-pressed
 * since: v1.27
@@ -1900,6 +1933,8 @@ The list of supported tokens:
   * Value: `/home/playwright/tests` (absolute path since `testDir` is resolved relative to directory with config)
 * `{testFileDir}` - Directories in relative path from `testDir` to **test file**.
   * Value: `page`
+* `{testFileBaseName}` - Test file name without the last extension.
+  * Value: `page-click.spec`
 * `{testFileName}` - Test file name with extension.
   * Value: `page-click.spec.ts`
 * `{testFilePath}` - Relative path from `testDir` to **test file**.
@@ -1929,4 +1964,46 @@ In this config:
 1. Second project **does** have a name, so its snapshots will be stored in `<configDir>/__screenshots__/chromium/example.spec.ts/..`.
 1. Since `snapshotPathTemplate` resolves to relative path, it will be resolved relative to `configDir`.
 1. Forward slashes `"/"` can be used as path separators on any platform.
+
+## test-config-web-server-options
+* langs: js
+- type: ?<[Object]|[Array]<[Object]>>
+  - `command` <[string]> Shell command to start. For example `npm run start`..
+  - `cwd` ?<[string]> Current working directory of the spawned process, defaults to the directory of the configuration file.
+  - `env` ?<[Object]<[string], [string]>> Environment variables to set for the command, `process.env` by default.
+  - `gracefulShutdown` ?<[Object]> How to shut down the process. If unspecified, the process group is forcefully `SIGKILL`ed. If set to `{ signal: 'SIGTERM', timeout: 500 }`, the process group is sent a `SIGTERM` signal, followed by `SIGKILL` if it doesn't exit within 500ms. You can also use `SIGINT` as the signal instead. A `0` timeout means no `SIGKILL` will be sent. Windows doesn't support `SIGTERM` and `SIGINT` signals, so this option is ignored on Windows. Note that shutting down a Docker container requires `SIGTERM`.
+    - `signal` <["SIGINT"|"SIGTERM"]>
+    - `timeout` <[int]>
+  - `ignoreHTTPSErrors` ?<[boolean]> Whether to ignore HTTPS errors when fetching the `url`. Defaults to `false`.
+  - `name` ?<[string]> Specifies a custom name for the web server. This name will be prefixed to log messages. Defaults to `[WebServer]`.
+  - `port` ?<[int]> The port that your http server is expected to appear on. It does wait until it accepts connections. Either `port` or `url` should be specified.
+  - `reuseExistingServer` ?<[boolean]> If true, it will re-use an existing server on the `port` or `url` when available. If no server is running on that `port` or `url`, it will run the command to start a new server. If `false`, it will throw if an existing process is listening on the `port` or `url`. This should be commonly set to `!process.env.CI` to allow the local dev server when running tests locally.
+  - `stderr` ?<["pipe"|"ignore"]> Whether to pipe the stderr of the command to the process stderr or ignore it. Defaults to `"pipe"`.
+  - `stdout` ?<["pipe"|"ignore"]> If `"pipe"`, it will pipe the stdout of the command to the process stdout. If `"ignore"`, it will ignore the stdout of the command. Default to `"ignore"`.
+  - `wait` ?<[Object]> Consider command started only when given output has been produced.
+    - `stdout` ?<[RegExp]> Regular expression to wait for in the `stdout` of the command output. Named capture groups are stored in the environment, for example `/Listening on port (?<my_server_port>\d+)/` will store the port number in `process.env['MY_SERVER_PORT']`.
+    - `stderr` ?<[RegExp]> Regular expression to wait for in the `stderr` of the command output. Named capture groups are stored in the environment, for example `/Listening on port (?<my_server_port>\d+)/` will store the port number in `process.env['MY_SERVER_PORT']`.
+  - `timeout` ?<[int]> How long to wait for the process to start up and be available in milliseconds. Defaults to 60000.
+  - `url` ?<[string]> The url on your http server that is expected to return a 2xx, 3xx, 400, 401, 402, or 403 status code when the server is ready to accept connections. Redirects (3xx status codes) are being followed and the new location is checked. Either `port` or `url` should be specified.
+
+## response-security-details
+- returns: <[null]|[Object]>
+  * alias: SecurityDetails
+  * alias-csharp: ResponseSecurityDetailsResult
+  - `issuer` ?<[string]> Common Name component of the Issuer field.
+    from the certificate. This should only be used for informational purposes. Optional.
+  - `protocol` ?<[string]> The specific TLS protocol used. (e.g. `TLS 1.3`). Optional.
+  - `subjectName` ?<[string]> Common Name component of the Subject
+    field from the certificate. This should only be used for informational purposes. Optional.
+  - `validFrom` ?<[float]> Unix timestamp (in seconds) specifying
+    when this cert becomes valid. Optional.
+  - `validTo` ?<[float]> Unix timestamp (in seconds) specifying
+    when this cert becomes invalid. Optional.
+
+## response-server-addr
+- returns: <[null]|[Object]>
+  * alias-csharp: ResponseServerAddrResult
+  * alias-java: ServerAddr
+  - `ipAddress` <[string]> IPv4 or IPV6 address of the server.
+  - `port` <[int]>
 

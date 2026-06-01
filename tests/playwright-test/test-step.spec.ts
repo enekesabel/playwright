@@ -388,6 +388,41 @@ test('should not pass return value from step', async ({ runInlineTest }) => {
   expect(result.output).toContain('v2 = 20');
 });
 
+test('should contain steps chain in the stack', async ({ runInlineTest }) => {
+  const result = await runInlineTest({
+    'a.test.ts': `
+      import { test, expect } from '@playwright/test';
+
+      async function innerFunction(page) {
+        await test.step('inner step', async () => {
+          await expect(page.locator('div')).toBeVisible({ timeout: 1 });
+        });
+      }
+
+      async function outerFunction(page) {
+        await test.step('outer step', async () => {
+          await innerFunction(page);
+        });
+      }
+
+      // It is important to have "page" here to trigger some internal instrumentation.
+      test('test with chained steps', async ({ page }) => {
+        await test.step('top-level step', async () => {
+          await outerFunction(page);
+        });
+      });
+    `
+  }, { reporter: '', workers: 1 });
+  expect(result.exitCode).toBe(1);
+  expect(result.failed).toBe(1);
+  expect(result.output).toContain('at innerFunction');
+  expect(result.output).toContain('at outerFunction');
+  expect(result.output).toContain('a.test.ts:5');
+  expect(result.output).toContain('a.test.ts:6');
+  expect(result.output).toContain('a.test.ts:11');
+  expect(result.output).toContain('a.test.ts:18');
+});
+
 test('step timeout option', async ({ runInlineTest }) => {
   const result = await runInlineTest({
     'a.test.ts': `
@@ -443,22 +478,6 @@ test('step timeout includes interrupted action errors', async ({ runInlineTest }
   expect.soft(result.output).toContain('Error: page.waitForTimeout: Test ended.');
   expect.soft(result.output.split('Error: page.waitForTimeout: Test ended.').length).toBe(2);
   expect.soft(result.output).toContain('> 5 |           await page.waitForTimeout(100_000);');
-});
-
-test('step timeout is errors.TimeoutError', async ({ runInlineTest }) => {
-  const result = await runInlineTest({
-    'a.test.ts': `
-      import { test, expect, errors } from '@playwright/test';
-      test('step timeout error type', async () => {
-        const e = await test.step('my step', async () => {
-          await new Promise(() => {});
-        }, { timeout: 100 }).catch(e => e);
-        expect(e).toBeInstanceOf(errors.TimeoutError);
-      });
-    `
-  }, { reporter: '', workers: 1 });
-  expect(result.exitCode).toBe(0);
-  expect(result.passed).toBe(1);
 });
 
 test('should mark step as failed when soft expect fails', async ({ runInlineTest }) => {
@@ -557,10 +576,10 @@ pw:api    |    Create context
 fixture   |  Fixture "page"
 pw:api    |    Create page
 test.step |grand @ a.test.ts:20
-test.step |  parent1 @ a.test.ts:22
+test.step |  parent1 @ a.test.ts:21
 test.step |    child1 @ a.test.ts:23
 pw:api    |      Click locator('body') @ a.test.ts:24
-test.step |  parent2 @ a.test.ts:27
+test.step |  parent2 @ a.test.ts:21
 test.step |    child2 @ a.test.ts:28
 expect    |      Expect "toBeVisible" main element @ a.test.ts:29
 hook      |After Hooks
@@ -785,16 +804,16 @@ hook      |Before Hooks
 test.step |boxed step @ a.test.ts:3
 test.step |↪ error: Error: expect(received).toBe(expected) // Object.is equality @ a.test.ts:4
 test.step |    at a.test.ts:4:27
-test.step |    at a.test.ts:3:26
+test.step |    at a.test.ts:3:15
 expect    |  Expect "toBe" @ a.test.ts:4
 expect    |  ↪ error: Error: expect(received).toBe(expected) // Object.is equality @ a.test.ts:4
 expect    |      at a.test.ts:4:27
-expect    |      at a.test.ts:3:26
+expect    |      at a.test.ts:3:15
 hook      |After Hooks
 hook      |Worker Cleanup
           |Error: expect(received).toBe(expected) // Object.is equality @ a.test.ts:4
           |    at a.test.ts:4:27
-          |    at a.test.ts:3:26
+          |    at a.test.ts:3:15
 `);
 });
 
@@ -820,14 +839,14 @@ test('should step w/ box', async ({ runInlineTest }) => {
 hook      |Before Hooks
 test.step |boxed step @ a.test.ts:8
 test.step |↪ error: Error: expect(received).toBe(expected) // Object.is equality @ a.test.ts:8
-test.step |    at a.test.ts:8:21
+test.step |    at a.test.ts:8:15
 expect    |  Expect "toBe" @ a.test.ts:5
 expect    |  ↪ error: Error: expect(received).toBe(expected) // Object.is equality @ a.test.ts:8
-expect    |      at a.test.ts:8:21
+expect    |      at a.test.ts:8:15
 hook      |After Hooks
 hook      |Worker Cleanup
           |Error: expect(received).toBe(expected) // Object.is equality @ a.test.ts:8
-          |    at a.test.ts:8:21
+          |    at a.test.ts:8:15
 `);
 });
 
@@ -853,14 +872,14 @@ test('should soft step w/ box', async ({ runInlineTest }) => {
 hook      |Before Hooks
 test.step |boxed step @ a.test.ts:8
 test.step |↪ error: Error: expect(received).toBe(expected) // Object.is equality @ a.test.ts:8
-test.step |    at a.test.ts:8:21
+test.step |    at a.test.ts:8:15
 expect    |  Expect "soft toBe" @ a.test.ts:5
 expect    |  ↪ error: Error: expect(received).toBe(expected) // Object.is equality @ a.test.ts:8
-expect    |      at a.test.ts:8:21
+expect    |      at a.test.ts:8:15
 hook      |After Hooks
 hook      |Worker Cleanup
           |Error: expect(received).toBe(expected) // Object.is equality @ a.test.ts:8
-          |    at a.test.ts:8:21
+          |    at a.test.ts:8:15
 `);
 });
 

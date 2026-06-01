@@ -18,7 +18,7 @@ import * as React from 'react';
 import type { Boundaries } from './geometry';
 import './networkTab.css';
 import { NetworkResourceDetails } from './networkResourceDetails';
-import { bytesToString, msToString } from '@web/uiUtils';
+import { bytesToString, msToString } from '@isomorphic/formatUtils';
 import { PlaceholderPanel } from './placeholderPanel';
 import { context, type ResourceEntry } from '@isomorphic/trace/traceModel';
 import type { TraceModel } from '@isomorphic/trace/traceModel';
@@ -34,7 +34,6 @@ type NetworkTabModel = {
 };
 
 type RenderedEntry = {
-  ordinal: number,
   name: { name: string, url: string },
   method: string,
   status: { code: number, text: string },
@@ -50,16 +49,18 @@ type ColumnName = keyof RenderedEntry;
 type Sorting = { by: ColumnName, negate: boolean};
 const NetworkGridView = GridView<RenderedEntry>;
 
-export function useNetworkTabModel(model: TraceModel | undefined, selectedTime: Boundaries | undefined): NetworkTabModel {
+export function useNetworkTabModel(model: TraceModel | undefined, selectedTime: Boundaries | undefined, pageId?: string): NetworkTabModel {
   const resources = React.useMemo(() => {
     const resources = model?.resources || [];
     const filtered = resources.filter(resource => {
+      if (pageId && resource.pageref !== pageId)
+        return false;
       if (!selectedTime)
         return true;
       return !!resource._monotonicTime && (resource._monotonicTime >= selectedTime.minimum && resource._monotonicTime <= selectedTime.maximum);
     });
     return filtered;
-  }, [model, selectedTime]);
+  }, [model, selectedTime, pageId]);
   const contextIdMap = React.useMemo(() => new ContextIdMap(model), [model]);
   return { resources, contextIdMap };
 }
@@ -67,7 +68,7 @@ export function useNetworkTabModel(model: TraceModel | undefined, selectedTime: 
 export const NetworkTab: React.FunctionComponent<{
   boundaries: Boundaries,
   networkModel: NetworkTabModel,
-  onResourceHovered?: (ordinal: number | undefined) => void,
+  onResourceHovered?: (time: Boundaries | undefined) => void,
   sdkLanguage: Language,
 }> = ({ boundaries, networkModel, onResourceHovered, sdkLanguage }) => {
   const [sorting, setSorting] = React.useState<Sorting | undefined>(undefined);
@@ -75,7 +76,7 @@ export const NetworkTab: React.FunctionComponent<{
   const [filterState, setFilterState] = React.useState(defaultFilterState);
 
   const { renderedEntries } = React.useMemo(() => {
-    const renderedEntries = networkModel.resources.map((entry, i) => renderEntry(entry, boundaries, networkModel.contextIdMap, i)).filter(filterEntry(filterState));
+    const renderedEntries = networkModel.resources.map(entry => renderEntry(entry, boundaries, networkModel.contextIdMap)).filter(filterEntry(filterState));
     if (sorting)
       sort(renderedEntries, sorting);
     return { renderedEntries };
@@ -101,7 +102,7 @@ export const NetworkTab: React.FunctionComponent<{
     items={renderedEntries}
     selectedItem={visibleSelectedEntry}
     onSelected={item => setSelectedResourceKey(item.resource.id)}
-    onHighlighted={item => onResourceHovered?.(item?.ordinal)}
+    onHighlighted={item => onResourceHovered?.(item ? resourceTimeRange(item.resource) : undefined)}
     columns={visibleColumns(!!visibleSelectedEntry, renderedEntries)}
     columnTitle={columnTitle}
     columnWidths={columnWidths}
@@ -197,8 +198,8 @@ const renderCell = (entry: RenderedEntry, column: ColumnName): RenderedGridCell 
     return { body: entry.method };
   if (column === 'status') {
     return {
-      body: entry.status.code > 0 ? entry.status.code : '',
-      title: entry.status.text
+      body: entry.status.code === -1 ? 'canceled' : entry.status.code > 0 ? entry.status.code : '',
+      title: entry.status.code === -1 ? 'canceled' : entry.status.text,
     };
   }
   if (column === 'contentType')
@@ -264,7 +265,7 @@ function hasMultipleContexts(renderedEntries: RenderedEntry[]): boolean {
   return false;
 }
 
-const renderEntry = (resource: ResourceEntry, boundaries: Boundaries, contextIdGenerator: ContextIdMap, ordinal: number): RenderedEntry => {
+const renderEntry = (resource: ResourceEntry, boundaries: Boundaries, contextIdGenerator: ContextIdMap): RenderedEntry => {
   const routeStatus = formatRouteStatus(resource);
   let resourceName: string;
   try {
@@ -283,7 +284,6 @@ const renderEntry = (resource: ResourceEntry, boundaries: Boundaries, contextIdG
     contentType = charset[1];
 
   return {
-    ordinal,
     name: { name: resourceName, url: resource.request.url },
     method: resource.request.method,
     status: { code: resource.response.status, text: resource.response.statusText },
@@ -296,6 +296,12 @@ const renderEntry = (resource: ResourceEntry, boundaries: Boundaries, contextIdG
     contextId: contextIdGenerator.contextId(resource),
   };
 };
+
+function resourceTimeRange(resource: ResourceEntry): Boundaries | undefined {
+  if (!resource._monotonicTime)
+    return undefined;
+  return { minimum: resource._monotonicTime, maximum: resource._monotonicTime + resource.time };
+}
 
 function formatRouteStatus(request: ResourceEntry): string {
   if (request._wasAborted)

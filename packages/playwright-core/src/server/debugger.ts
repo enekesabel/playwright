@@ -14,20 +14,23 @@
  * limitations under the License.
  */
 
-import { EventEmitter } from 'events';
-
-import { debugMode, isUnderTest, monotonicTime } from '../utils';
+import { getMetainfo } from '@isomorphic/protocolMetainfo';
+import { monotonicTime } from '@isomorphic/time';
+import { SdkObject } from './instrumentation';
 import { BrowserContext } from './browserContext';
-import { methodMetainfo } from '../utils/isomorphic/protocolMetainfo';
 
-import type { CallMetadata, InstrumentationListener, SdkObject } from './instrumentation';
+import type { CallMetadata, InstrumentationListener } from './instrumentation';
+import type { Progress } from '@protocol/progress';
 
 const symbol = Symbol('Debugger');
 
-export class Debugger extends EventEmitter implements InstrumentationListener {
-  private _pauseOnNextStatement = false;
-  private _pausedCallsMetadata = new Map<CallMetadata, { resolve: () => void, sdkObject: SdkObject }>();
-  private _enabled: boolean;
+type PauseAt = { next?: boolean, location?: { file: string, line?: number, column?: number } };
+
+export class Debugger extends SdkObject implements InstrumentationListener {
+  private _pauseAt: PauseAt = {};
+  private _pausedCall: { metadata: CallMetadata, sdkObject: SdkObject, resolve: () => void } | undefined;
+  private _enabled = false;
+  private _pauseBeforeWaitingActions = false;  // instead of inside input actions
   private _context: BrowserContext;
 
   static Events = {
@@ -36,16 +39,44 @@ export class Debugger extends EventEmitter implements InstrumentationListener {
   private _muted = false;
 
   constructor(context: BrowserContext) {
-    super();
+    super(context, 'debugger');
     this._context = context;
     (this._context as any)[symbol] = this;
-    this._enabled = debugMode() === 'inspector';
-    if (this._enabled)
-      this.pauseOnNextStatement();
-    context.instrumentation.addListener(this, context);
+    // Register as a last listener so the debugger pause runs after other listeners
+    // (e.g. recorder action-point capture) have recorded their state.
+    context.instrumentation.addListener(this, context, { order: 'last' });
     this._context.once(BrowserContext.Events.Close, () => {
       this._context.instrumentation.removeListener(this);
     });
+  }
+
+  requestPause(progress: Progress) {
+    if (this.isPaused())
+      throw new Error('Debugger is already paused');
+    this.setPauseBeforeWaitingActions();
+    this.setPauseAt({ next: true });
+  }
+
+  doResume(progress: Progress) {
+    if (!this.isPaused())
+      throw new Error('Debugger is not paused');
+    this.resume();
+  }
+
+  next(progress: Progress) {
+    if (!this.isPaused())
+      throw new Error('Debugger is not paused');
+    this.setPauseBeforeWaitingActions();
+    this.setPauseAt({ next: true });
+    this.resume();
+  }
+
+  runTo(progress: Progress, location: { file: string, line?: number, column?: number }) {
+    if (!this.isPaused())
+      throw new Error('Debugger is not paused');
+    this.setPauseBeforeWaitingActions();
+    this.setPauseAt({ location });
+    this.resume();
   }
 
   async setMuted(muted: boolean) {
@@ -53,74 +84,71 @@ export class Debugger extends EventEmitter implements InstrumentationListener {
   }
 
   async onBeforeCall(sdkObject: SdkObject, metadata: CallMetadata): Promise<void> {
-    if (this._muted)
+    if (this._muted || metadata.internal)
       return;
-    if (shouldPauseOnCall(sdkObject, metadata) || (this._pauseOnNextStatement && shouldPauseBeforeStep(metadata)))
-      await this.pause(sdkObject, metadata);
+    const metainfo = getMetainfo(metadata);
+    const pauseOnPauseCall = this._enabled && metadata.type === 'BrowserContext' && metadata.method === 'pause';
+    const pauseBeforeAction = !!this._pauseAt.next && !!metainfo?.pause && (this._pauseBeforeWaitingActions || !metainfo?.isAutoWaiting);
+    const pauseOnLocation = !!this._pauseAt.location && matchesLocation(metadata, this._pauseAt.location);
+    if (pauseOnPauseCall || pauseBeforeAction || pauseOnLocation)
+      await this._pause(sdkObject, metadata);
   }
 
   async onBeforeInputAction(sdkObject: SdkObject, metadata: CallMetadata): Promise<void> {
-    if (this._muted)
+    if (this._muted || metadata.internal)
       return;
-    if (this._enabled && this._pauseOnNextStatement)
-      await this.pause(sdkObject, metadata);
+    const metainfo = getMetainfo(metadata);
+    const pauseBeforeInput = !!this._pauseAt.next && !!metainfo?.pause && !!metainfo?.isAutoWaiting && !this._pauseBeforeWaitingActions;
+    if (pauseBeforeInput)
+      await this._pause(sdkObject, metadata);
   }
 
-  async pause(sdkObject: SdkObject, metadata: CallMetadata) {
-    if (this._muted)
+  private async _pause(sdkObject: SdkObject, metadata: CallMetadata) {
+    if (this._muted || metadata.internal)
       return;
-    this._enabled = true;
+    if (this._pausedCall)
+      return;
+    this._pauseAt = {};
     metadata.pauseStartTime = monotonicTime();
     const result = new Promise<void>(resolve => {
-      this._pausedCallsMetadata.set(metadata, { resolve, sdkObject });
+      this._pausedCall = { metadata, sdkObject, resolve };
     });
     this.emit(Debugger.Events.PausedStateChanged);
     return result;
   }
 
-  resume(step: boolean) {
-    if (!this.isPaused())
+  resume() {
+    if (!this._pausedCall)
       return;
 
-    this._pauseOnNextStatement = step;
-    const endTime = monotonicTime();
-    for (const [metadata, { resolve }] of this._pausedCallsMetadata) {
-      metadata.pauseEndTime = endTime;
-      resolve();
-    }
-    this._pausedCallsMetadata.clear();
+    this._pausedCall.metadata.pauseEndTime = monotonicTime();
+    this._pausedCall.resolve();
+    this._pausedCall = undefined;
     this.emit(Debugger.Events.PausedStateChanged);
   }
 
-  pauseOnNextStatement() {
-    this._pauseOnNextStatement = true;
+  setPauseBeforeWaitingActions() {
+    this._pauseBeforeWaitingActions = true;
+  }
+
+  setPauseAt(at: { next?: boolean, location?: { file: string, line?: number, column?: number } } = {}) {
+    this._enabled = true;
+    this._pauseAt = at;
   }
 
   isPaused(metadata?: CallMetadata): boolean {
     if (metadata)
-      return this._pausedCallsMetadata.has(metadata);
-    return !!this._pausedCallsMetadata.size;
+      return this._pausedCall?.metadata === metadata;
+    return !!this._pausedCall;
   }
 
-  pausedDetails(): { metadata: CallMetadata, sdkObject: SdkObject }[] {
-    const result: { metadata: CallMetadata, sdkObject: SdkObject }[] = [];
-    for (const [metadata, { sdkObject }] of this._pausedCallsMetadata)
-      result.push({ metadata, sdkObject });
-    return result;
+  pausedDetails(): { metadata: CallMetadata, sdkObject: SdkObject } | undefined {
+    return this._pausedCall;
   }
 }
 
-function shouldPauseOnCall(sdkObject: SdkObject, metadata: CallMetadata): boolean {
-  if (sdkObject.attribution.playwright.options.isServer)
-    return false;
-  if (!sdkObject.attribution.browser?.options.headful && !isUnderTest())
-    return false;
-  return metadata.method === 'pause';
-}
-
-function shouldPauseBeforeStep(metadata: CallMetadata): boolean {
-  if (metadata.internal)
-    return false;
-  const metainfo = methodMetainfo.get(metadata.type + '.' + metadata.method);
-  return !!metainfo?.pausesBeforeAction;
+function matchesLocation(metadata: CallMetadata, location: { file: string, line?: number, column?: number }): boolean {
+  return !!metadata.location?.file.includes(location.file) &&
+      (location.line === undefined || metadata.location.line === location.line) &&
+      (location.column === undefined || metadata.location.column === location.column);
 }

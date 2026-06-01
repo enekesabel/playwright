@@ -98,7 +98,7 @@ export class ClockController {
 
   install(time: number) {
     this._replayLogOnce();
-    this._innerSetTime(asWallTime(time));
+    this._innerInstall(asWallTime(time));
   }
 
   setSystemTime(time: number) {
@@ -134,6 +134,15 @@ export class ClockController {
     this._now.isFixedTime = false;
     if (this._now.origin < 0)
       this._now.origin = this._now.time;
+  }
+
+  private _innerInstall(time: WallTime) {
+    // On a fresh install, reset the monotonic counter so that drift
+    // accumulated by the realTime ticker before the user called install()
+    // does not leak into performance.now().
+    if (this._now.origin < 0)
+      this._now.ticks = 0 as Ticks;
+    this._innerSetTime(time);
   }
 
   private _innerSetFixedTime(time: WallTime) {
@@ -440,7 +449,7 @@ export class ClockController {
       lastLogTime = time;
 
       if (type === 'install') {
-        this._innerSetTime(asWallTime(param!));
+        this._innerInstall(asWallTime(param!));
       } else if (type === 'fastForward' || type === 'runFor') {
         this._advanceNow(shiftTicks(this._now.ticks, param!));
       } else if (type === 'pauseAt') {
@@ -701,6 +710,24 @@ function getClearHandler(type: TimerType) {
   return `clear${type}`;
 }
 
+class FakePerformanceEntry {
+  name: string;
+  entryType: string;
+  startTime: number;
+  duration: number;
+
+  constructor(name: string, entryType: string, startTime: number, duration: number) {
+    this.name = name;
+    this.entryType = entryType;
+    this.startTime = startTime;
+    this.duration = duration;
+  }
+
+  toJSON() {
+    return JSON.stringify({ ...this });
+  }
+}
+
 function fakePerformance(clock: ClockController, performance: Builtins['performance']): Builtins['performance'] {
   const result: any = {
     now: () => clock.performanceNow(),
@@ -712,6 +739,10 @@ function fakePerformance(clock: ClockController, performance: Builtins['performa
       continue;
     if (key === 'getEntries' || key === 'getEntriesByName' || key === 'getEntriesByType')
       result[key] = () => [];
+    else if (key === 'mark')
+      result[key] = (name: string) => new FakePerformanceEntry(name, 'mark', 0, 0);
+    else if (key === 'measure')
+      result[key] = (name: string) => new FakePerformanceEntry(name, 'measure', 0, 50);
     else
       result[key] = () => {};
   }

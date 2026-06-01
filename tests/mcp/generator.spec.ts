@@ -38,7 +38,6 @@ test('generator tools intent', async ({ startClient }) => {
   expect(toolsWithIntent).toContain('browser_fill_form');
   expect(toolsWithIntent).toContain('browser_handle_dialog');
   expect(toolsWithIntent).toContain('browser_hover');
-  expect(toolsWithIntent).toContain('browser_install');
   expect(toolsWithIntent).toContain('browser_mouse_click_xy');
   expect(toolsWithIntent).toContain('browser_mouse_drag_xy');
   expect(toolsWithIntent).toContain('browser_mouse_move_xy');
@@ -47,7 +46,7 @@ test('generator tools intent', async ({ startClient }) => {
   expect(toolsWithIntent).toContain('browser_press_key');
   expect(toolsWithIntent).toContain('browser_press_sequentially');
   expect(toolsWithIntent).toContain('browser_resize');
-  expect(toolsWithIntent).toContain('browser_run_code');
+  expect(toolsWithIntent).toContain('browser_run_code_unsafe');
   expect(toolsWithIntent).toContain('browser_select_option');
   expect(toolsWithIntent).toContain('browser_tabs');
 });
@@ -88,7 +87,7 @@ test('generator_setup_page', async ({ startClient }) => {
     name: 'browser_click',
     arguments: {
       element: 'Submit button',
-      ref: 'e2',
+      target: 'e2',
       intent: 'Click submit button',
     },
   });
@@ -152,7 +151,7 @@ test('click after generator_log_action', async ({ startClient }) => {
     name: 'browser_click',
     arguments: {
       element: 'Submit button',
-      ref: 'e2',
+      target: 'e2',
       intent: 'Click submit button',
     },
   })).toHaveResponse({
@@ -305,7 +304,7 @@ test('should respect custom test id', async ({ startClient }) => {
     name: 'browser_click',
     arguments: {
       element: 'Submit button',
-      ref: 'e2',
+      target: 'e2',
       intent: 'Click submit button',
     },
   })).toHaveResponse({

@@ -20,26 +20,29 @@ import os from 'os';
 import path from 'path';
 import * as util from 'util';
 
-import { downloadBrowserWithProgressBar, logPolitely } from './browserFetcher';
-import { dockerVersion, readDockerVersionSync, transformCommandsForRoot } from './dependencies';
+import { wrapInASCIIBox } from '@utils/ascii';
+import { debugLogger } from '@utils/debugLogger';
+import { shortPlatform, hostPlatform, isOfficiallySupportedPlatform } from '@utils/hostPlatform';
+import { NET_DEFAULT_TIMEOUT } from '@utils/network';
+import { spawnAsync } from '@utils/spawnAsync';
+import { canAccessFile, existsAsync, removeFolders } from '@utils/fileUtils';
+import { calculateSha1 } from '@utils/crypto';
+import { getAsBooleanFromENV, getFromENV, getPackageManagerExecCommand } from '@utils/env';
+import { lock } from '@utils/third_party/lockfile';
+import { fetchData } from '../utils';
+import { getEmbedderName } from '../userAgent';
 import { installDependenciesLinux, installDependenciesWindows, validateDependenciesLinux, validateDependenciesWindows } from './dependencies';
-import { calculateSha1, getAsBooleanFromENV, getFromENV, getPackageManagerExecCommand } from '../../utils';
-import { wrapInASCIIBox } from '../utils/ascii';
-import { debugLogger } from '../utils/debugLogger';
-import { shortPlatform, hostPlatform, isOfficiallySupportedPlatform } from '../utils/hostPlatform';
-import { fetchData, NET_DEFAULT_TIMEOUT } from '../utils/network';
-import { spawnAsync } from '../utils/spawnAsync';
-import { getEmbedderName } from '../utils/userAgent';
-import { lockfile } from '../../utilsBundle';
-import { canAccessFile, existsAsync, removeFolders } from '../utils/fileUtils';
+import { dockerVersion, readDockerVersionSync, transformCommandsForRoot } from './dependencies';
+import { downloadBrowserWithProgressBar, logPolitely } from './browserFetcher';
+import { packageRoot, binPath } from '../../package';
 
 import type { DependencyGroup } from './dependencies';
-import type { HostPlatform } from '../utils/hostPlatform';
+import type { HostPlatform } from '@utils/hostPlatform';
 
 export { writeDockerVersion } from './dependencies';
 
-const PACKAGE_PATH = path.join(__dirname, '..', '..', '..');
-const BIN_PATH = path.join(__dirname, '..', '..', '..', 'bin');
+const PACKAGE_PATH = packageRoot;
+const BIN_PATH = binPath;
 
 const PLAYWRIGHT_CDN_MIRRORS = [
   'https://cdn.playwright.dev/dbazure/download/playwright', // ESRP CDN
@@ -146,10 +149,12 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'ubuntu20.04-x64': cftUrl('linux64/chrome-linux64.zip'),
     'ubuntu22.04-x64': cftUrl('linux64/chrome-linux64.zip'),
     'ubuntu24.04-x64': cftUrl('linux64/chrome-linux64.zip'),
+    'ubuntu26.04-x64': cftUrl('linux64/chrome-linux64.zip'),
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/chromium/%s/chromium-linux-arm64.zip',
     'ubuntu22.04-arm64': 'builds/chromium/%s/chromium-linux-arm64.zip',
     'ubuntu24.04-arm64': 'builds/chromium/%s/chromium-linux-arm64.zip',
+    'ubuntu26.04-arm64': 'builds/chromium/%s/chromium-linux-arm64.zip',
     'debian11-x64': cftUrl('linux64/chrome-linux64.zip'),
     'debian11-arm64': 'builds/chromium/%s/chromium-linux-arm64.zip',
     'debian12-x64': cftUrl('linux64/chrome-linux64.zip'),
@@ -169,6 +174,8 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'mac14-arm64': cftUrl('mac-arm64/chrome-mac-arm64.zip'),
     'mac15': cftUrl('mac-x64/chrome-mac-x64.zip'),
     'mac15-arm64': cftUrl('mac-arm64/chrome-mac-arm64.zip'),
+    'mac26': cftUrl('mac-x64/chrome-mac-x64.zip'),
+    'mac26-arm64': cftUrl('mac-arm64/chrome-mac-arm64.zip'),
     'win64': cftUrl('win64/chrome-win64.zip'),
   },
   'chromium-headless-shell': {
@@ -177,10 +184,12 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'ubuntu20.04-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
     'ubuntu22.04-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
     'ubuntu24.04-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
+    'ubuntu26.04-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/chromium/%s/chromium-headless-shell-linux-arm64.zip',
     'ubuntu22.04-arm64': 'builds/chromium/%s/chromium-headless-shell-linux-arm64.zip',
     'ubuntu24.04-arm64': 'builds/chromium/%s/chromium-headless-shell-linux-arm64.zip',
+    'ubuntu26.04-arm64': 'builds/chromium/%s/chromium-headless-shell-linux-arm64.zip',
     'debian11-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
     'debian11-arm64': 'builds/chromium/%s/chromium-headless-shell-linux-arm64.zip',
     'debian12-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
@@ -200,6 +209,8 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'mac14-arm64': cftUrl('mac-arm64/chrome-headless-shell-mac-arm64.zip'),
     'mac15': cftUrl('mac-x64/chrome-headless-shell-mac-x64.zip'),
     'mac15-arm64': cftUrl('mac-arm64/chrome-headless-shell-mac-arm64.zip'),
+    'mac26': cftUrl('mac-x64/chrome-headless-shell-mac-x64.zip'),
+    'mac26-arm64': cftUrl('mac-arm64/chrome-headless-shell-mac-arm64.zip'),
     'win64': cftUrl('win64/chrome-headless-shell-win64.zip'),
   },
   'chromium-tip-of-tree': {
@@ -208,10 +219,12 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'ubuntu20.04-x64': cftUrl('linux64/chrome-linux64.zip'),
     'ubuntu22.04-x64': cftUrl('linux64/chrome-linux64.zip'),
     'ubuntu24.04-x64': cftUrl('linux64/chrome-linux64.zip'),
+    'ubuntu26.04-x64': cftUrl('linux64/chrome-linux64.zip'),
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux-arm64.zip',
     'ubuntu22.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux-arm64.zip',
     'ubuntu24.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux-arm64.zip',
+    'ubuntu26.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux-arm64.zip',
     'debian11-x64': cftUrl('linux64/chrome-linux64.zip'),
     'debian11-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux-arm64.zip',
     'debian12-x64': cftUrl('linux64/chrome-linux64.zip'),
@@ -231,6 +244,8 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'mac14-arm64': cftUrl('mac-arm64/chrome-mac-arm64.zip'),
     'mac15': cftUrl('mac-x64/chrome-mac-x64.zip'),
     'mac15-arm64': cftUrl('mac-arm64/chrome-mac-arm64.zip'),
+    'mac26': cftUrl('mac-x64/chrome-mac-x64.zip'),
+    'mac26-arm64': cftUrl('mac-arm64/chrome-mac-arm64.zip'),
     'win64': cftUrl('win64/chrome-win64.zip'),
   },
   'chromium-tip-of-tree-headless-shell': {
@@ -239,10 +254,12 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'ubuntu20.04-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
     'ubuntu22.04-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
     'ubuntu24.04-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
+    'ubuntu26.04-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-headless-shell-linux-arm64.zip',
     'ubuntu22.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-headless-shell-linux-arm64.zip',
     'ubuntu24.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-headless-shell-linux-arm64.zip',
+    'ubuntu26.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-headless-shell-linux-arm64.zip',
     'debian11-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
     'debian11-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-headless-shell-linux-arm64.zip',
     'debian12-x64': cftUrl('linux64/chrome-headless-shell-linux64.zip'),
@@ -262,6 +279,8 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'mac14-arm64': cftUrl('mac-arm64/chrome-headless-shell-mac-arm64.zip'),
     'mac15': cftUrl('mac-x64/chrome-headless-shell-mac-x64.zip'),
     'mac15-arm64': cftUrl('mac-arm64/chrome-headless-shell-mac-arm64.zip'),
+    'mac26': cftUrl('mac-x64/chrome-headless-shell-mac-x64.zip'),
+    'mac26-arm64': cftUrl('mac-arm64/chrome-headless-shell-mac-arm64.zip'),
     'win64': cftUrl('win64/chrome-headless-shell-win64.zip'),
   },
   'firefox': {
@@ -270,10 +289,12 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'ubuntu20.04-x64': 'builds/firefox/%s/firefox-ubuntu-20.04.zip',
     'ubuntu22.04-x64': 'builds/firefox/%s/firefox-ubuntu-22.04.zip',
     'ubuntu24.04-x64': 'builds/firefox/%s/firefox-ubuntu-24.04.zip',
+    'ubuntu26.04-x64': 'builds/firefox/%s/firefox-ubuntu-24.04.zip',
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/firefox/%s/firefox-ubuntu-20.04-arm64.zip',
     'ubuntu22.04-arm64': 'builds/firefox/%s/firefox-ubuntu-22.04-arm64.zip',
     'ubuntu24.04-arm64': 'builds/firefox/%s/firefox-ubuntu-24.04-arm64.zip',
+    'ubuntu26.04-arm64': 'builds/firefox/%s/firefox-ubuntu-24.04-arm64.zip',
     'debian11-x64': 'builds/firefox/%s/firefox-debian-11.zip',
     'debian11-arm64': 'builds/firefox/%s/firefox-debian-11-arm64.zip',
     'debian12-x64': 'builds/firefox/%s/firefox-debian-12.zip',
@@ -293,6 +314,8 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'mac14-arm64': 'builds/firefox/%s/firefox-mac-arm64.zip',
     'mac15': 'builds/firefox/%s/firefox-mac.zip',
     'mac15-arm64': 'builds/firefox/%s/firefox-mac-arm64.zip',
+    'mac26': 'builds/firefox/%s/firefox-mac.zip',
+    'mac26-arm64': 'builds/firefox/%s/firefox-mac-arm64.zip',
     'win64': 'builds/firefox/%s/firefox-win64.zip',
   },
   'firefox-beta': {
@@ -301,10 +324,12 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'ubuntu20.04-x64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-20.04.zip',
     'ubuntu22.04-x64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-22.04.zip',
     'ubuntu24.04-x64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-24.04.zip',
+    'ubuntu26.04-x64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-24.04.zip',
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': undefined,
     'ubuntu22.04-arm64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-22.04-arm64.zip',
     'ubuntu24.04-arm64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-24.04-arm64.zip',
+    'ubuntu26.04-arm64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-24.04-arm64.zip',
     'debian11-x64': 'builds/firefox-beta/%s/firefox-beta-debian-11.zip',
     'debian11-arm64': 'builds/firefox-beta/%s/firefox-beta-debian-11-arm64.zip',
     'debian12-x64': 'builds/firefox-beta/%s/firefox-beta-debian-12.zip',
@@ -324,6 +349,8 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'mac14-arm64': 'builds/firefox-beta/%s/firefox-beta-mac-arm64.zip',
     'mac15': 'builds/firefox-beta/%s/firefox-beta-mac.zip',
     'mac15-arm64': 'builds/firefox-beta/%s/firefox-beta-mac-arm64.zip',
+    'mac26': 'builds/firefox-beta/%s/firefox-beta-mac.zip',
+    'mac26-arm64': 'builds/firefox-beta/%s/firefox-beta-mac-arm64.zip',
     'win64': 'builds/firefox-beta/%s/firefox-beta-win64.zip',
   },
   'webkit': {
@@ -332,10 +359,12 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'ubuntu20.04-x64': 'builds/webkit/%s/webkit-ubuntu-20.04.zip',
     'ubuntu22.04-x64': 'builds/webkit/%s/webkit-ubuntu-22.04.zip',
     'ubuntu24.04-x64': 'builds/webkit/%s/webkit-ubuntu-24.04.zip',
+    'ubuntu26.04-x64': 'builds/webkit/%s/webkit-ubuntu-26.04.zip',
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/webkit/%s/webkit-ubuntu-20.04-arm64.zip',
     'ubuntu22.04-arm64': 'builds/webkit/%s/webkit-ubuntu-22.04-arm64.zip',
     'ubuntu24.04-arm64': 'builds/webkit/%s/webkit-ubuntu-24.04-arm64.zip',
+    'ubuntu26.04-arm64': 'builds/webkit/%s/webkit-ubuntu-26.04-arm64.zip',
     'debian11-x64': 'builds/webkit/%s/webkit-debian-11.zip',
     'debian11-arm64': 'builds/webkit/%s/webkit-debian-11-arm64.zip',
     'debian12-x64': 'builds/webkit/%s/webkit-debian-12.zip',
@@ -355,6 +384,8 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'mac14-arm64': 'builds/webkit/%s/webkit-mac-14-arm64.zip',
     'mac15': 'builds/webkit/%s/webkit-mac-15.zip',
     'mac15-arm64': 'builds/webkit/%s/webkit-mac-15-arm64.zip',
+    'mac26': 'builds/webkit/%s/webkit-mac-15.zip',
+    'mac26-arm64': 'builds/webkit/%s/webkit-mac-15-arm64.zip',
     'win64': 'builds/webkit/%s/webkit-win64.zip',
   },
   'ffmpeg': {
@@ -363,10 +394,12 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'ubuntu20.04-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
     'ubuntu22.04-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
     'ubuntu24.04-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
+    'ubuntu26.04-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/ffmpeg/%s/ffmpeg-linux-arm64.zip',
     'ubuntu22.04-arm64': 'builds/ffmpeg/%s/ffmpeg-linux-arm64.zip',
     'ubuntu24.04-arm64': 'builds/ffmpeg/%s/ffmpeg-linux-arm64.zip',
+    'ubuntu26.04-arm64': 'builds/ffmpeg/%s/ffmpeg-linux-arm64.zip',
     'debian11-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
     'debian11-arm64': 'builds/ffmpeg/%s/ffmpeg-linux-arm64.zip',
     'debian12-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
@@ -386,6 +419,8 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'mac14-arm64': 'builds/ffmpeg/%s/ffmpeg-mac-arm64.zip',
     'mac15': 'builds/ffmpeg/%s/ffmpeg-mac.zip',
     'mac15-arm64': 'builds/ffmpeg/%s/ffmpeg-mac-arm64.zip',
+    'mac26': 'builds/ffmpeg/%s/ffmpeg-mac.zip',
+    'mac26-arm64': 'builds/ffmpeg/%s/ffmpeg-mac-arm64.zip',
     'win64': 'builds/ffmpeg/%s/ffmpeg-win64.zip',
   },
   'winldd': {
@@ -394,10 +429,12 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'ubuntu20.04-x64': undefined,
     'ubuntu22.04-x64': undefined,
     'ubuntu24.04-x64': undefined,
+    'ubuntu26.04-x64': undefined,
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': undefined,
     'ubuntu22.04-arm64': undefined,
     'ubuntu24.04-arm64': undefined,
+    'ubuntu26.04-arm64': undefined,
     'debian11-x64': undefined,
     'debian11-arm64': undefined,
     'debian12-x64': undefined,
@@ -417,6 +454,8 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'mac14-arm64': undefined,
     'mac15': undefined,
     'mac15-arm64': undefined,
+    'mac26': undefined,
+    'mac26-arm64': undefined,
     'win64': 'builds/winldd/%s/winldd-win64.zip',
   },
   'android': {
@@ -425,10 +464,12 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'ubuntu20.04-x64': 'builds/android/%s/android.zip',
     'ubuntu22.04-x64': 'builds/android/%s/android.zip',
     'ubuntu24.04-x64': 'builds/android/%s/android.zip',
+    'ubuntu26.04-x64': 'builds/android/%s/android.zip',
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/android/%s/android.zip',
     'ubuntu22.04-arm64': 'builds/android/%s/android.zip',
     'ubuntu24.04-arm64': 'builds/android/%s/android.zip',
+    'ubuntu26.04-arm64': 'builds/android/%s/android.zip',
     'debian11-x64': 'builds/android/%s/android.zip',
     'debian11-arm64': 'builds/android/%s/android.zip',
     'debian12-x64': 'builds/android/%s/android.zip',
@@ -448,30 +489,34 @@ const DOWNLOAD_PATHS: Record<string, DownloadPaths> = {
     'mac14-arm64': 'builds/android/%s/android.zip',
     'mac15': 'builds/android/%s/android.zip',
     'mac15-arm64': 'builds/android/%s/android.zip',
+    'mac26': 'builds/android/%s/android.zip',
+    'mac26-arm64': 'builds/android/%s/android.zip',
     'win64': 'builds/android/%s/android.zip',
   },
 };
+
+export const defaultCacheDirectory = (() => {
+  if (process.platform === 'linux')
+    return process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache');
+  if (process.platform === 'darwin')
+    return path.join(os.homedir(), 'Library', 'Caches');
+  if (process.platform === 'win32')
+    return process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  throw new Error('Unsupported platform: ' + process.platform);
+})();
+
+export const defaultRegistryDirectory = path.join(defaultCacheDirectory, 'ms-playwright');
 
 export const registryDirectory = (() => {
   let result: string;
 
   const envDefined = getFromENV('PLAYWRIGHT_BROWSERS_PATH');
-  if (envDefined === '0') {
-    result = path.join(__dirname, '..', '..', '..', '.local-browsers');
-  } else if (envDefined) {
+  if (envDefined === '0')
+    result = path.join(packageRoot, '.local-browsers');
+  else if (envDefined)
     result = envDefined;
-  } else {
-    let cacheDirectory: string;
-    if (process.platform === 'linux')
-      cacheDirectory = process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache');
-    else if (process.platform === 'darwin')
-      cacheDirectory = path.join(os.homedir(), 'Library', 'Caches');
-    else if (process.platform === 'win32')
-      cacheDirectory = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-    else
-      throw new Error('Unsupported platform: ' + process.platform);
-    result = path.join(cacheDirectory, 'ms-playwright');
-  }
+  else
+    result = defaultRegistryDirectory;
 
   if (!path.isAbsolute(result)) {
     // It is important to resolve to the absolute path:
@@ -1057,7 +1102,7 @@ export class Registry {
 
     let releaseLock;
     try {
-      releaseLock = await lockfile.lock(registryDirectory, {
+      releaseLock = await lock(registryDirectory, {
         retries: {
           // Retry 20 times during 10 minutes with
           // exponential back-off.
@@ -1286,7 +1331,8 @@ export class Registry {
       if (code !== 0)
         throw new Error(`Failed to install ${channel}`);
     } else {
-      const { command, args, elevatedPermissions } = await transformCommandsForRoot([`bash "${path.join(BIN_PATH, scriptName)}" ${scriptArgs.join('')}`]);
+      const shellArgs = scriptArgs.map(a => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
+      const { command, args, elevatedPermissions } = await transformCommandsForRoot([`bash "${path.join(BIN_PATH, scriptName)}" ${shellArgs}`]);
       if (elevatedPermissions)
         console.log('Switching to root user to install dependencies...'); // eslint-disable-line no-console
       const { code } = await spawnAsync(command, args, { cwd, stdio: 'inherit' });
@@ -1431,7 +1477,7 @@ export class Registry {
 
     if (faultyArguments.length)
       throw new Error(`Invalid installation targets: ${faultyArguments.map(name => `'${name}'`).join(', ')}. Expecting one of: ${this.suggestedBrowsersToInstall()}`);
-    return executables;
+    return [...new Set(executables)];
   }
 }
 
@@ -1515,4 +1561,6 @@ function lowercaseAllKeys(json: any): any {
   return result;
 }
 
-export const registry = new Registry(require('../../../browsers.json'));
+export const registry = new Registry(require(path.join(packageRoot, 'browsers.json')));
+
+export { runOopDownloadBrowserMain } from './oopDownloadBrowserMain';

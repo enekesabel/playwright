@@ -17,7 +17,6 @@
 import fs from 'fs';
 import path from 'path';
 import { chromium } from 'playwright';
-import { Loop } from '@lowire/loop';
 
 import { test as baseTest, expect as baseExpect } from '@playwright/test';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -25,21 +24,24 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { TestServer } from '../config/testserver';
 import { serverFixtures } from '../config/serverFixtures';
-import { parseResponse } from '../../packages/playwright/lib/mcp/browser/response';
+import { tools } from '../../packages/playwright-core/lib/coreBundle';
 import { commonFixtures } from '../config/commonFixtures';
+import { RunServer } from '../config/remoteServer';
+import { inheritAndCleanEnv } from '../config/utils';
 
 import type { CommonFixtures, CommonWorkerFixtures } from '../config/commonFixtures';
-import type { Config } from '../../packages/playwright/src/mcp/config';
+import type { Config } from '../../packages/playwright-core/src/tools/mcp/config.d';
 import type { BrowserContext } from 'playwright';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { Stream } from 'stream';
 import type { ServerFixtures, ServerWorkerOptions } from '../config/serverFixtures';
 
-export { parseResponse };
+export const { parseResponse } = tools;
 
 export type TestOptions = {
   mcpArgs: string[] | undefined;
   mcpBrowser: string | undefined;
+  mcpBrowserNormalized: string | undefined;
   mcpCaps: string[] | undefined;
   mcpServerType: 'mcp' | 'test-mcp';
 };
@@ -66,11 +68,11 @@ type TestFixtures = {
   client: Client;
   startClient: StartClient;
   wsEndpoint: string;
+  runServerEndpoint: string;
   cdpServer: CDPServer;
   server: TestServer;
   httpsServer: TestServer;
   mcpHeadless: boolean;
-  loop: Loop;
 };
 
 type WorkerFixtures = {
@@ -135,11 +137,10 @@ export const test = serverTest.extend<TestFixtures & TestOptions, WorkerFixtures
           };
         });
       }
-      const env = {
-        ...process.env,
+      const env = inheritAndCleanEnv({
         PW_TMPDIR_FOR_TEST: testInfo.outputPath('tmp'),
         ...options?.env
-      };
+      });
       const { transport, stderr } = await createTransport(mcpServerType, { args, env, cwd: options?.cwd || test.info().outputPath() });
       let stderrBuffer = '';
       stderr?.on('data', data => {
@@ -162,6 +163,13 @@ export const test = serverTest.extend<TestFixtures & TestOptions, WorkerFixtures
     await browserServer.close();
   },
 
+  runServerEndpoint: async ({ childProcess }, use) => {
+    const runServer = new RunServer();
+    await runServer.start(childProcess);
+    await use(runServer.wsEndpoint());
+    await runServer.close();
+  },
+
   cdpServer: async ({ mcpBrowser }, use, testInfo) => {
     test.skip(!['chrome', 'msedge', 'chromium'].includes(mcpBrowser!), 'CDP is not supported for non-Chromium browsers');
 
@@ -170,7 +178,7 @@ export const test = serverTest.extend<TestFixtures & TestOptions, WorkerFixtures
     await use({
       endpoint: `http://localhost:${port}`,
       start: async () => {
-        if (browserContext)
+        if (browserContext && browserContext.browser()?.isConnected())
           throw new Error('CDP server already exists');
         browserContext = await chromium.launchPersistentContext(testInfo.outputPath('cdp-user-data-dir'), {
           channel: mcpBrowser,
@@ -182,7 +190,7 @@ export const test = serverTest.extend<TestFixtures & TestOptions, WorkerFixtures
         return browserContext;
       }
     });
-    await browserContext?.close();
+    await browserContext?.close().catch(() => {});
   },
 
   mcpHeadless: async ({ headless }, use) => {
@@ -200,6 +208,11 @@ export const test = serverTest.extend<TestFixtures & TestOptions, WorkerFixtures
   },
 
   mcpBrowser: ['chrome', { option: true }],
+
+  mcpBrowserNormalized: async ({ mcpBrowser }, use) => {
+    const normalized = mcpBrowser?.replace(/chromium/, 'chrome-for-testing');
+    await use(normalized);
+  },
 
   mcpServerType: ['mcp', { option: true }],
 });
@@ -231,7 +244,7 @@ type Response = Awaited<ReturnType<Client['callTool']>>;
 
 export const expect = baseExpect.extend({
   toHaveResponse(response: Response, object: any) {
-    const parsed = parseResponse(response);
+    const parsed = tools.parseResponse(response, test.info().outputPath());
     const text = parsed.text;
     const isNot = this.isNot;
 
@@ -286,12 +299,8 @@ export const expect = baseExpect.extend({
   },
 });
 
-export function formatOutput(output: string): string[] {
-  return output.split('\n').map(line => line.replace(/^pw:mcp:test /, '').replace(/user data dir.*/, 'user data dir').trim()).filter(Boolean);
-}
-
-export const mcpServerPath = [path.join(__dirname, '../../packages/playwright/cli.js'), 'run-mcp-server'];
-export const testMcpServerPath = [path.join(__dirname, '../../packages/playwright-test/cli.js'), 'run-test-mcp-server'];
+export const mcpServerPath = [require.resolve('../../packages/playwright-core/lib/entry/mcp.js')];
+export const testMcpServerPath = [require.resolve('../../packages/playwright-test/cli.js'), 'run-test-mcp-server'];
 
 type Files = { [key: string]: string | Buffer };
 
@@ -340,4 +349,17 @@ export async function prepareDebugTest(startClient: StartClient, testFile?: stri
   });
   const [, id] = listResult.content[0].text.match(/\[id=([^\]]+)\]/);
   return { client, id };
+}
+
+export function formatLog(stderr: string) {
+  const lines = stderr.split('\n').filter(l => l.startsWith('pw:mcp:test')).map(l => l.replace(/^pw:mcp:test\s+/, ''));
+  const object = {};
+  for (const line of lines)
+    object[line] = (object[line] || 0) + 1;
+  return object;
+}
+
+export async function consoleEntries(response: any) {
+  const file = response.events?.match(/New console entries: (.+\.log)(#L\d+)?/)?.[1];
+  return await fs.promises.readFile(test.info().outputPath(file), 'utf-8');
 }

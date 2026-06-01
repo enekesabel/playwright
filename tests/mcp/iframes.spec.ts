@@ -30,15 +30,14 @@ test('stitched aria frames', async ({ client }) => {
       - button "World" [ref=f1e2]
       - main [ref=f1e3]:
         - iframe [ref=f1e4]:
-          - paragraph [ref=f3e2]: Nested
-\`\`\``),
+          - paragraph [ref=f3e2]: Nested`),
   });
 
   expect(await client.callTool({
     name: 'browser_click',
     arguments: {
       element: 'World',
-      ref: 'f1e2',
+      target: 'f1e2',
     },
   })).toHaveResponse({
     code: `await page.locator('iframe').first().contentFrame().getByRole('button', { name: 'World' }).click();`,

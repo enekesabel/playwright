@@ -41,7 +41,6 @@ export interface RecorderDelegate {
   setMode?(mode: Mode): Promise<void>;
   setOverlayState?(state: OverlayState): Promise<void>;
   highlightUpdated?(): void;
-  log?(...args: any[]): void;
 }
 
 interface RecorderTool {
@@ -169,7 +168,7 @@ class InspectTool implements RecorderTool {
 
   private _commit(selector: string, model: HighlightModel) {
     if (this._assertVisibility) {
-      this._recorder.recordAction({
+      void this._recorder.recordAction({
         name: 'assertVisible',
         selector,
         signals: [],
@@ -415,7 +414,8 @@ class RecordActionTool implements RecorderTool {
     if (target.nodeName === 'INPUT' && (target as HTMLInputElement).type.toLowerCase() === 'file') {
       this._recordAction({
         name: 'setInputFiles',
-        selector: this._activeModel!.selector,
+        // webkit doesn't focus file inputs on click, so activeModel is unreliable here.
+        selector: this._hoveredModel!.selector,
         signals: [],
         files: [...((target as HTMLInputElement).files || [])].map(file => file.name),
       });
@@ -615,13 +615,7 @@ class RecordActionTool implements RecorderTool {
   }
 
   private _shouldIgnoreMouseEvent(event: MouseEvent): boolean {
-    const target = this._recorder.deepEventTarget(event);
-    const nodeName = target.nodeName;
-    if (nodeName === 'SELECT' || nodeName === 'OPTION')
-      return true;
-    if (nodeName === 'INPUT' && ['date', 'range'].includes((target as HTMLInputElement).type))
-      return true;
-    return false;
+    return shouldIgnoreMouseEvent(this._recorder.deepEventTarget(event));
   }
 
   private _actionInProgress(event: Event): boolean {
@@ -659,8 +653,19 @@ class RecordActionTool implements RecorderTool {
       consumeEvent(event);
   }
 
+  private _reportPerformedActionForTests() {
+    if (!this._recorder.injectedScript.isUnderTest)
+      return;
+    // Serialize all to string as we cannot attribute console message to isolated world
+    // in Firefox.
+    console.error('Action performed for test: ' + JSON.stringify({ // eslint-disable-line no-console
+      hovered: this._hoveredModel ? this._hoveredModel.selector : null,
+      active: this._activeModel ? this._activeModel.selector : null,
+    }));
+  }
+
   private _recordAction(action: actions.Action) {
-    this._recorder.recordAction(action);
+    void this._recorder.recordAction(action).then(() => this._reportPerformedActionForTests());
   }
 
   private _performAction(action: actions.PerformOnRecordAction) {
@@ -668,23 +673,11 @@ class RecordActionTool implements RecorderTool {
 
     this._performingActions.add(action);
 
-    const promise = this._recorder.performAction(action).then(() => {
+    void this._recorder.performAction(action).finally(() => {
       this._performingActions.delete(action);
       // If that was a keyboard action, it similarly requires new selectors for active model.
       this._onFocus(false);
-    });
-
-    if (!this._recorder.injectedScript.isUnderTest)
-      return;
-
-    void promise.then(() => {
-      // Serialize all to string as we cannot attribute console message to isolated world
-      // in Firefox.
-      console.error('Action performed for test: ' + JSON.stringify({ // eslint-disable-line no-console
-        hovered: this._hoveredModel ? (this._hoveredModel as any).selector : null,
-        active: this._activeModel ? (this._activeModel as any).selector : null,
-      }));
-    });
+    }).then(() => this._reportPerformedActionForTests());
   }
 
   private _shouldGenerateKeyPressFor(event: KeyboardEvent): boolean {
@@ -773,7 +766,7 @@ class JsonRecordActionTool implements RecorderTool {
     const { ariaSnapshot, selector, ref } = this._ariaSnapshot(element);
     if (checkbox && event.detail === 1) {
       // Interestingly, inputElement.checked is reversed inside this event handler.
-      this._recorder.recordAction({
+      void this._recorder.recordAction({
         name: checkbox.checked ? 'check' : 'uncheck',
         selector,
         ref,
@@ -783,7 +776,7 @@ class JsonRecordActionTool implements RecorderTool {
       return;
     }
 
-    this._recorder.recordAction({
+    void this._recorder.recordAction({
       name: 'click',
       selector,
       ref,
@@ -799,7 +792,7 @@ class JsonRecordActionTool implements RecorderTool {
   onContextMenu(event: MouseEvent): void {
     const element = this._recorder.deepEventTarget(event);
     const { ariaSnapshot, selector, ref } = this._ariaSnapshot(element);
-    this._recorder.recordAction({
+    void this._recorder.recordAction({
       name: 'click',
       selector,
       ref,
@@ -817,7 +810,7 @@ class JsonRecordActionTool implements RecorderTool {
 
     const { ariaSnapshot, selector, ref } = this._ariaSnapshot(element);
     if (isRangeInput(element)) {
-      this._recorder.recordAction({
+      void this._recorder.recordAction({
         name: 'fill',
         selector,
         ref,
@@ -834,7 +827,7 @@ class JsonRecordActionTool implements RecorderTool {
         return;
       }
 
-      this._recorder.recordAction({
+      void this._recorder.recordAction({
         name: 'fill',
         ref,
         selector,
@@ -847,7 +840,7 @@ class JsonRecordActionTool implements RecorderTool {
 
     if (element.nodeName === 'SELECT') {
       const selectElement = element as HTMLSelectElement;
-      this._recorder.recordAction({
+      void this._recorder.recordAction({
         name: 'select',
         selector,
         ref,
@@ -870,7 +863,7 @@ class JsonRecordActionTool implements RecorderTool {
     if (event.key === ' ') {
       const checkbox = asCheckbox(element);
       if (checkbox && event.detail === 0) {
-        this._recorder.recordAction({
+        void this._recorder.recordAction({
           name: checkbox.checked ? 'uncheck' : 'check',
           selector,
           ref,
@@ -881,7 +874,7 @@ class JsonRecordActionTool implements RecorderTool {
       }
     }
 
-    this._recorder.recordAction({
+    void this._recorder.recordAction({
       name: 'press',
       selector,
       ref,
@@ -893,13 +886,7 @@ class JsonRecordActionTool implements RecorderTool {
   }
 
   private _shouldIgnoreMouseEvent(event: MouseEvent): boolean {
-    const target = this._recorder.deepEventTarget(event);
-    const nodeName = target.nodeName;
-    if (nodeName === 'SELECT' || nodeName === 'OPTION')
-      return true;
-    if (nodeName === 'INPUT' && ['date', 'range'].includes((target as HTMLInputElement).type))
-      return true;
-    return false;
+    return shouldIgnoreMouseEvent(this._recorder.deepEventTarget(event));
   }
 
   private _shouldGenerateKeyPressFor(event: KeyboardEvent): boolean {
@@ -1100,7 +1087,7 @@ class TextAssertionTool implements RecorderTool {
     if (!this._action || !this._dialog.isShowing())
       return;
     this._dialog.close();
-    this._recorder.recordAction(this._action);
+    void this._recorder.recordAction(this._action);
     this._recorder.setMode('recording');
   }
 
@@ -1111,7 +1098,7 @@ class TextAssertionTool implements RecorderTool {
     if (this._action?.name === 'assertText') {
       this._showTextDialog(this._action);
     } else if (this._action?.name === 'assertSnapshot') {
-      this._recorder.recordAction(this._action);
+      void this._recorder.recordAction(this._action);
       this._recorder.setMode('recording');
       this._recorder.overlay?.flashToolSucceeded('assertingSnapshot');
     }
@@ -1152,7 +1139,7 @@ class TextAssertionTool implements RecorderTool {
     const action = this._generateAction();
     if (!action)
       return;
-    this._recorder.recordAction(action);
+    void this._recorder.recordAction(action);
     this._recorder.setMode('recording');
     this._recorder.overlay?.flashToolSucceeded('assertingValue');
   }
@@ -1525,7 +1512,6 @@ export class Recorder {
   }
 
   private _onClick(event: MouseEvent) {
-    this._delegate.log?.('_onClick', { x: event.clientX, y: event.clientY, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this.overlay?.onClick(event))
@@ -1536,7 +1522,6 @@ export class Recorder {
   }
 
   private _onDblClick(event: MouseEvent) {
-    this._delegate.log?.('_onDblClick', { x: event.clientX, y: event.clientY, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this.overlay?.onDblClick(event))
@@ -1547,7 +1532,6 @@ export class Recorder {
   }
 
   private _onContextMenu(event: MouseEvent) {
-    this._delegate.log?.('_onContextMenu', { x: event.clientX, y: event.clientY, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     // Note: in chromium windows, context menu event always includes overlay,
@@ -1558,7 +1542,6 @@ export class Recorder {
   }
 
   private _onDragStart(event: DragEvent) {
-    this._delegate.log?.('_onDragStart', { x: event.clientX, y: event.clientY, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this._ignoreOverlayEvent(event))
@@ -1567,7 +1550,6 @@ export class Recorder {
   }
 
   private _onPointerDown(event: PointerEvent) {
-    this._delegate.log?.('_onPointerDown', { x: event.clientX, y: event.clientY, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this._ignoreOverlayEvent(event))
@@ -1576,7 +1558,6 @@ export class Recorder {
   }
 
   private _onPointerUp(event: PointerEvent) {
-    this._delegate.log?.('_onPointerUp', { x: event.clientX, y: event.clientY, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this._ignoreOverlayEvent(event))
@@ -1585,7 +1566,6 @@ export class Recorder {
   }
 
   private _onMouseDown(event: MouseEvent) {
-    this._delegate.log?.('_onMouseDown', { x: event.clientX, y: event.clientY, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this._ignoreOverlayEvent(event))
@@ -1594,7 +1574,6 @@ export class Recorder {
   }
 
   private _onMouseUp(event: MouseEvent) {
-    this._delegate.log?.('_onMouseUp', { x: event.clientX, y: event.clientY, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this.overlay?.onMouseUp(event))
@@ -1605,7 +1584,6 @@ export class Recorder {
   }
 
   private _onMouseMove(event: MouseEvent) {
-    this._delegate.log?.('_onMouseMove', { x: event.clientX, y: event.clientY, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this.overlay?.onMouseMove(event))
@@ -1616,7 +1594,6 @@ export class Recorder {
   }
 
   private _onMouseEnter(event: MouseEvent) {
-    this._delegate.log?.('_onMouseEnter', { x: event.clientX, y: event.clientY, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this._ignoreOverlayEvent(event))
@@ -1625,7 +1602,6 @@ export class Recorder {
   }
 
   private _onMouseLeave(event: MouseEvent) {
-    this._delegate.log?.('_onMouseLeave', { x: event.clientX, y: event.clientY, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this._ignoreOverlayEvent(event))
@@ -1634,7 +1610,6 @@ export class Recorder {
   }
 
   private _onFocus(event: Event) {
-    this._delegate.log?.('_onFocus', { target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this._ignoreOverlayEvent(event))
@@ -1643,7 +1618,6 @@ export class Recorder {
   }
 
   private _onScroll(event: Event) {
-    this._delegate.log?.('_onScroll', { target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     this._lastHighlightedSelector = undefined;
@@ -1653,14 +1627,12 @@ export class Recorder {
   }
 
   private _onInput(event: Event) {
-    this._delegate.log?.('_onInput', { target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (this._ignoreOverlayEvent(event))
       return;
     this._currentTool.onInput?.(event);
   }
 
   private _onKeyDown(event: KeyboardEvent) {
-    this._delegate.log?.('_onKeyDown', { key: event.key, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this._ignoreOverlayEvent(event))
@@ -1669,7 +1641,6 @@ export class Recorder {
   }
 
   private _onKeyUp(event: KeyboardEvent) {
-    this._delegate.log?.('_onKeyUp', { key: event.key, target: event.target ? (event.target as Element).nodeName : 'unknown' });
     if (!event.isTrusted)
       return;
     if (this._ignoreOverlayEvent(event))
@@ -1731,9 +1702,9 @@ export class Recorder {
     await this._delegate.performAction?.(action).catch(() => {});
   }
 
-  recordAction(action: actions.Action) {
+  async recordAction(action: actions.Action) {
     this._lastActionAutoexpectSnapshot = this._captureAutoExpectSnapshot();
-    void this._delegate.recordAction?.(action);
+    await this._delegate.recordAction?.(action);
   }
 
   setOverlayState(state: { offsetX: number; }) {
@@ -1741,7 +1712,7 @@ export class Recorder {
   }
 
   elementPicked(selector: string, model: HighlightModel) {
-    const ariaSnapshot = this.injectedScript.ariaSnapshot(model.elements[0], { mode: 'expect' });
+    const ariaSnapshot = this.injectedScript.ariaSnapshot(model.elements[0], { mode: 'default' });
     void this._delegate.elementPicked?.({ selector, ariaSnapshot });
   }
 }
@@ -1902,6 +1873,18 @@ function isRangeInput(node: Node | null): node is HTMLInputElement {
     return false;
   const inputElement = node as HTMLInputElement;
   return inputElement.type.toLowerCase() === 'range';
+}
+
+// Non-text input types that open native pickers.
+const kNativePickerInputTypes = new Set(['color', 'date', 'datetime-local', 'file', 'month', 'range', 'time', 'week']);
+
+function shouldIgnoreMouseEvent(target: Node): boolean {
+  const nodeName = target.nodeName;
+  if (nodeName === 'SELECT' || nodeName === 'OPTION')
+    return true;
+  if (nodeName === 'INPUT' && kNativePickerInputTypes.has((target as HTMLInputElement).type))
+    return true;
+  return false;
 }
 
 function addEventListener(target: EventTarget, eventName: string, listener: EventListener, useCapture?: boolean): () => void {

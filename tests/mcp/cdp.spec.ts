@@ -43,10 +43,10 @@ test('cdp server reuse tab', async ({ cdpServer, startClient, server }) => {
     name: 'browser_click',
     arguments: {
       element: 'Hello, world!',
-      ref: 'f0',
+      target: 'f0',
     },
   })).toHaveResponse({
-    error: `Error: Ref f0 not found in the current page snapshot. Try capturing new snapshot.`,
+    error: `Error: "f0" does not match any elements.`,
     isError: true,
   });
 
@@ -55,9 +55,7 @@ test('cdp server reuse tab', async ({ cdpServer, startClient, server }) => {
   })).toHaveResponse({
     page: `- Page URL: ${server.HELLO_WORLD}
 - Page Title: Title`,
-    snapshot: `\`\`\`yaml
-- generic [active] [ref=e1]: Hello, world!
-\`\`\``,
+    inlineSnapshot: `- generic [active] [ref=e1]: Hello, world!`,
   });
 });
 
@@ -73,7 +71,7 @@ test('should throw connection error and allow re-connecting', async ({ cdpServer
     name: 'browser_navigate',
     arguments: { url: server.PREFIX },
   })).toHaveResponse({
-    error: expect.stringContaining(`Error: browserType.connectOverCDP: connect ECONNREFUSED`),
+    error: expect.stringContaining(`connect ECONNREFUSED`),
     isError: true,
   });
   await cdpServer.start();
@@ -82,6 +80,40 @@ test('should throw connection error and allow re-connecting', async ({ cdpServer
     arguments: { url: server.PREFIX },
   })).toHaveResponse({
     snapshot: expect.stringContaining(`- generic [active] [ref=e1]: Hello, world!`),
+  });
+});
+
+test('auto-recover when remote browser disconnects mid-session', async ({ cdpServer, startClient, server }) => {
+  const browserContext = await cdpServer.start();
+  const { client } = await startClient({ args: [`--cdp-endpoint=${cdpServer.endpoint}`] });
+
+  expect(await client.callTool({
+    name: 'browser_navigate',
+    arguments: { url: server.HELLO_WORLD },
+  })).toHaveResponse({
+    snapshot: expect.stringContaining(`Hello, world!`),
+  });
+
+  // Simulate the remote browser dying mid-session (e.g. CDP endpoint session timeout).
+  await browserContext.close();
+
+  // The next call hits the dead backend; it must error and let the MCP server discard
+  // the backend so the next call can transparently establish a fresh connection.
+  expect(await client.callTool({
+    name: 'browser_navigate',
+    arguments: { url: server.HELLO_WORLD },
+  })).toHaveResponse({
+    isError: true,
+  });
+
+  // Bring the CDP endpoint back. The next call should reconnect transparently —
+  // no manual browser_close needed (regression test for playwright-mcp#1588).
+  await cdpServer.start();
+  expect(await client.callTool({
+    name: 'browser_navigate',
+    arguments: { url: server.HELLO_WORLD },
+  })).toHaveResponse({
+    snapshot: expect.stringContaining(`Hello, world!`),
   });
 });
 
@@ -109,4 +141,30 @@ test('cdp server with headers', async ({ startClient, server }) => {
     isError: true,
   });
   expect(authHeader).toBe('Bearer 1234567890');
+});
+
+test('cdp server with empty and complex headers', async ({ startClient, server }) => {
+  let customHeader = '';
+  let emptyHeader = '';
+  server.setRoute('/json/version/', (req, res) => {
+    customHeader = req.headers['x-forwarded-proto'] as string;
+    emptyHeader = req.headers['x-empty'] as string;
+    res.end();
+  });
+
+  const { client } = await startClient({
+    args: [
+      `--cdp-endpoint=${server.PREFIX}`,
+      '--cdp-header', 'X-Forwarded-Proto: value:with:colons',
+      '--cdp-header', 'X-Empty'
+    ]
+  });
+  expect(await client.callTool({
+    name: 'browser_navigate',
+    arguments: { url: server.HELLO_WORLD },
+  })).toHaveResponse({
+    isError: true,
+  });
+  expect(customHeader).toBe('value:with:colons');
+  expect(emptyHeader).toBe('');
 });

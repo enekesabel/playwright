@@ -39,6 +39,10 @@ npx playwright init-agents --loop=vscode
 npx playwright init-agents --loop=claude
 ```
 
+```bash tab=bash-codex
+npx playwright init-agents --loop=codex
+```
+
 ```bash tab=bash-opencode
 npx playwright init-agents --loop=opencode
 ```
@@ -206,7 +210,7 @@ When the test fails, the healer agent:
 
 **Output**
 
-* A passing test, or a skipped test if the healer believes the that functionality is broken.
+* A passing test, or a skipped test if the healer believes that functionality is broken.
 
 ## Artifacts and Conventions
 

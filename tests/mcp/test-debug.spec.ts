@@ -119,7 +119,7 @@ test('test_debug (browser_snapshot/network/console)', async ({ startClient, serv
   expect(await client.callTool({
     name: 'browser_snapshot',
   })).toHaveResponse({
-    snapshot: expect.stringContaining(`generic [active] [ref=e1]: Hello, world!`),
+    inlineSnapshot: expect.stringContaining(`generic [active] [ref=e1]: Hello, world!`),
   });
 });
 
@@ -201,7 +201,7 @@ Try recovering from the error prior to continuing`);
   expect(await client.callTool({
     name: 'browser_snapshot',
   })).toHaveResponse({
-    snapshot: expect.stringContaining(`- button \"Submit\" [ref=e2]`),
+    inlineSnapshot: expect.stringContaining(`- button \"Submit\" [ref=e2]`),
   });
 
   expect(await client.callTool({
@@ -285,7 +285,7 @@ test('test_debug / evaluate (with element)', async ({ startClient }) => {
     arguments: {
       function: 'element => element.textContent',
       element: 'button',
-      ref: 'e2',
+      target: 'e2',
       intent: 'Get button text',
     },
   })).toHaveResponse({
@@ -305,7 +305,7 @@ test('test_debug / generate_locator', async ({ startClient }) => {
     name: 'browser_generate_locator',
     arguments: {
       element: 'button',
-      ref: 'e2',
+      target: 'e2',
     },
   })).toHaveResponse({
     result: `getByRole('button', { name: 'Submit' })`,
@@ -404,7 +404,7 @@ Error: expect(locator).toBeVisible() failed`));
   expect(await client.callTool({
     name: 'browser_network_requests',
   })).toHaveResponse({
-    result: `[GET\] ${server.PREFIX}/missing => [404] Not Found`,
+    result: expect.stringContaining(`[GET] ${server.PREFIX}/missing => [404] Not Found`),
   });
 });
 
@@ -436,5 +436,51 @@ Error: expect(locator).toBeVisible() failed`));
     arguments: { url: server.HELLO_WORLD, intent: 'Go to hello world' },
   })).toHaveResponse({
     page: expect.stringContaining(`- Page URL: ${server.HELLO_WORLD}\n- Page Title: Title2`),
+  });
+});
+
+test('test_debug (no default page fixture)', async ({ startClient }) => {
+  const { client, id } = await prepareDebugTest(startClient, `
+      import { test, expect } from '@playwright/test';
+      test('fail', async ({}) => {
+        throw new Error('failure');
+      });
+  `);
+  expect(await client.callTool({
+    name: 'test_debug',
+    arguments: {
+      test: { id, title: 'fail' },
+    },
+  })).toHaveTextResponse(expect.stringContaining(`Only tests that use default Playwright context or page fixture support test_debug`));
+});
+
+test('test_debug (custom fixture with browser.newContext)', async ({ startClient }) => {
+  const { client, id } = await prepareDebugTest(startClient, `
+      import { test as base, expect } from '@playwright/test';
+      const test = base.extend<{ customPage: import('@playwright/test').Page }>({
+        customPage: async ({ browser }, use) => {
+          const context = await browser.newContext();
+          const page = await context.newPage();
+          await use(page);
+          await context.close();
+        },
+      });
+      test('fail', async ({ customPage }) => {
+        await customPage.setContent('<button>Submit</button>');
+        await expect(customPage.getByRole('button', { name: 'Missing' })).toBeVisible({ timeout: 1000 });
+      });
+  `);
+
+  expect(await client.callTool({
+    name: 'test_debug',
+    arguments: {
+      test: { id, title: 'fail' },
+    },
+  })).toHaveTextResponse(expect.stringContaining(`### Paused on error:`));
+
+  expect(await client.callTool({
+    name: 'browser_snapshot',
+  })).toHaveResponse({
+    inlineSnapshot: expect.stringContaining(`- button "Submit" [ref=e2]`),
   });
 });

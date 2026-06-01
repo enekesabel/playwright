@@ -14,23 +14,23 @@
  * limitations under the License.
  */
 
+import { assert } from '@isomorphic/assert';
+import { headersObjectToArray } from '@isomorphic/headers';
+import { isString } from '@isomorphic/rtti';
 import { toClientCertificatesProtocol } from './browserContext';
 import { ChannelOwner } from './channelOwner';
 import { TargetClosedError, isTargetClosedError } from './errors';
 import { RawHeaders } from './network';
 import { Tracing } from './tracing';
-import { assert } from '../utils/isomorphic/assert';
 import { mkdirIfNeeded } from './fileUtils';
-import { headersObjectToArray } from '../utils/isomorphic/headers';
-import { isString } from '../utils/isomorphic/rtti';
 import { TimeoutSettings } from './timeoutSettings';
 
 import type { Playwright } from './playwright';
-import type { ClientCertificate, FilePayload, Headers, SetStorageState, StorageState, TimeoutOptions } from './types';
+import type { ClientCertificate, FilePayload, Headers, RemoteAddr, SecurityDetails, SetStorageState, StorageState, TimeoutOptions } from './types';
 import type { Serializable } from '../../types/structs';
 import type * as api from '../../types/types';
-import type { HeadersArray, NameValue } from '../utils/isomorphic/types';
-import type { Platform } from './platform';
+import type { HeadersArray, NameValue } from '@isomorphic/types';
+import type { Platform } from '@isomorphic/platform';
 import type * as channels from '@protocol/channels';
 import type * as fs from 'fs';
 
@@ -80,7 +80,7 @@ export class APIRequest implements api.APIRequest {
     this._contexts.add(context);
     context._request = this;
     context._timeoutSettings.setDefaultTimeout(options.timeout ?? this._playwright._defaultContextTimeout);
-    context._tracing._tracesDir = this._playwright._defaultLaunchOptions?.tracesDir;
+    context.tracing._tracesDir = this._playwright._defaultLaunchOptions?.tracesDir;
     await context._instrumentation.runAfterCreateRequestContext(context);
     return context;
   }
@@ -88,10 +88,9 @@ export class APIRequest implements api.APIRequest {
 
 export class APIRequestContext extends ChannelOwner<channels.APIRequestContextChannel> implements api.APIRequestContext {
   _request?: APIRequest;
-  readonly _tracing: Tracing;
+  readonly tracing: Tracing;
   private _closeReason: string | undefined;
   _timeoutSettings: TimeoutSettings;
-  _checkUrlAllowed?: (url: string) => void;
 
   static from(channel: channels.APIRequestContextChannel): APIRequestContext {
     return (channel as any)._object;
@@ -99,7 +98,7 @@ export class APIRequestContext extends ChannelOwner<channels.APIRequestContextCh
 
   constructor(parent: ChannelOwner, type: string, guid: string, initializer: channels.APIRequestContextInitializer) {
     super(parent, type, guid, initializer);
-    this._tracing = Tracing.from(initializer.tracing);
+    this.tracing = Tracing.from(initializer.tracing);
     this._timeoutSettings = new TimeoutSettings(this._platform);
   }
 
@@ -110,6 +109,7 @@ export class APIRequestContext extends ChannelOwner<channels.APIRequestContextCh
   async dispose(options: { reason?: string } = {}): Promise<void> {
     this._closeReason = options.reason;
     await this._instrumentation.runBeforeCloseRequestContext(this);
+    await this.tracing._exportAllHars();
     try {
       await this._channel.dispose(options);
     } catch (e) {
@@ -117,7 +117,7 @@ export class APIRequestContext extends ChannelOwner<channels.APIRequestContextCh
         return;
       throw e;
     }
-    this._tracing._resetStackCounter();
+    this.tracing._resetStackCounter();
     this._request?._contexts.delete(this);
   }
 
@@ -178,7 +178,6 @@ export class APIRequestContext extends ChannelOwner<channels.APIRequestContextCh
       assert(options.maxRedirects === undefined || options.maxRedirects >= 0, `'maxRedirects' must be greater than or equal to '0'`);
       assert(options.maxRetries === undefined || options.maxRetries >= 0, `'maxRetries' must be greater than or equal to '0'`);
       const url = options.url !== undefined ? options.url : options.request!.url();
-      this._checkUrlAllowed?.(url);
       const method = options.method || options.request?.method();
       let encodedParams = undefined;
       if (typeof options.params === 'string')
@@ -306,6 +305,7 @@ export class APIResponse implements api.APIResponse {
   private readonly _initializer: channels.APIResponse;
   private readonly _headers: RawHeaders;
   readonly _request: APIRequestContext;
+  _apiName = 'APIResponse';
 
   constructor(context: APIRequestContext, initializer: channels.APIResponse) {
     this._request = context;
@@ -338,6 +338,14 @@ export class APIResponse implements api.APIResponse {
 
   headersArray(): HeadersArray {
     return this._headers.headersArray();
+  }
+
+  async securityDetails(): Promise<SecurityDetails | null> {
+    return this._initializer.securityDetails ?? null;
+  }
+
+  async serverAddr(): Promise<RemoteAddr | null> {
+    return this._initializer.serverAddr ?? null;
   }
 
   async body(): Promise<Buffer> {

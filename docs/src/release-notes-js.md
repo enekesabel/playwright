@@ -6,6 +6,391 @@ toc_max_heading_level: 2
 
 import LiteYouTube from '@site/src/components/LiteYouTube';
 
+## Version 1.60
+
+### 🌐 HAR recording on Tracing
+
+[`method: Tracing.startHar`] / [`method: Tracing.stopHar`] expose HAR recording as a first-class tracing API, with the same `content`, `mode` and `urlFilter` options as `recordHar`. The returned [Disposable] makes it easy to scope a recording with `await using`:
+
+```js
+await using har = await context.tracing.startHar('trace.har');
+const page = await context.newPage();
+await page.goto('https://playwright.dev');
+// HAR is finalized when `har` goes out of scope.
+```
+
+### 🪝 Drop API
+
+New [`method: Locator.drop`] simulates an external drag-and-drop of files or clipboard-like data onto an element. Playwright dispatches `dragenter`, `dragover`, and `drop` with a synthetic [DataTransfer] in the page context — works cross-browser and is great for testing upload zones:
+
+```js
+await page.locator('#dropzone').drop({
+  files: { name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') },
+});
+
+await page.locator('#dropzone').drop({
+  data: {
+    'text/plain': 'hello world',
+    'text/uri-list': 'https://example.com',
+  },
+});
+```
+
+### 🎯 Aria snapshots
+
+- [`method: PageAssertions.toMatchAriaSnapshot`] now works on a [Page], in addition to a [Locator] — equivalent to asserting against `page.locator('body')`.
+- New `boxes` option on [`method: Locator.ariaSnapshot`] / [`method: Page.ariaSnapshot`] appends each element's bounding box as `[box=x,y,width,height]`, useful for AI consumption.
+
+### 🛑 test.abort()
+
+New [`method: Test.abort`] aborts the currently running test from a fixture, hook, or route handler with an optional message. Use it when you have detected an unrecoverable misuse and want to fail the test right away:
+
+```js
+test('does not publish to the shared page', async ({ page }) => {
+  await page.route('**/publish', route => {
+    test.abort('Tests must not publish to the shared page. Use the `clone` option.');
+    return route.abort();
+  });
+  // ...
+});
+```
+
+### New APIs
+
+#### Browser, Context and Page
+
+- Event [`event: Browser.context`] — fired when a new context is created on the browser.
+- [BrowserContext] now mirrors lifecycle events from its pages: [`event: BrowserContext.download`], [`event: BrowserContext.frameAttached`], [`event: BrowserContext.frameDetached`], [`event: BrowserContext.frameNavigated`], [`event: BrowserContext.pageClose`], [`event: BrowserContext.pageLoad`].
+
+#### Locators and Assertions
+
+- New option `description` in [`method: Page.getByRole`] / [`method: Locator.getByRole`] / [`method: Frame.getByRole`] / [`method: FrameLocator.getByRole`] for matching the [accessible description](https://www.w3.org/TR/wai-aria-1.2/#dfn-accessible-description).
+- New option `pseudo` in [`method: LocatorAssertions.toHaveCSS`] reads computed styles from `::before` or `::after`.
+- New option `style` in [`method: Locator.highlight`] applies extra inline CSS to the highlight overlay, plus new [`method: Page.hideHighlight`] to clear all highlights.
+
+#### Network
+
+- [`method: WebSocketRoute.protocols`] returns the WebSocket subprotocols requested by the page.
+- New option `noDefaults` in [`method: BrowserType.connectOverCDP`] disables Playwright's default overrides on the default context (download behavior, focus emulation, media emulation), so attaching to a user's daily-driver browser doesn't disturb its state.
+
+#### Errors and Reporting
+
+- New [`method: WebError.location`] mirrors [`method: ConsoleMessage.location`].
+- [`method: ConsoleMessage.location`] now exposes `line` / `column` properties (`lineNumber` / `columnNumber` are deprecated).
+- New [`property: TestInfoError.errorContext`] surfaces additional diagnostic context, such as the aria snapshot of the receiver at the time of an `expect(...)` matcher failure.
+- [`method: Reporter.onError`] now receives a `workerInfo` argument with details about the worker for fixture teardown errors.
+
+#### Test runner
+
+- New `{testFileBaseName}` token in [`property: TestProject.snapshotPathTemplate`] — file name without extension.
+- Test runner now errors when a config tries to override a non-option fixture, and rejects `workers: 0` or negative values.
+
+### 🛠️ Other improvements
+
+- HTML reporter:
+  - `npx playwright show-report` accepts `.zip` files directly — no need to unzip first.
+  - Steps that contain attachments inside nested children show an indicator on the parent step.
+  - The `repeatEachIndex` is shown in the test header when non-zero.
+- Trace Viewer adds a pretty-print toggle for JSON / form request and response bodies in the network details panel.
+
+### Breaking Changes ⚠️
+
+- Removed long-deprecated APIs:
+  - `Locator.ariaRef()` — use the standard [`method: Locator.ariaSnapshot`] pipeline.
+  - `handle` option on `BrowserContext.exposeBinding` and `Page.exposeBinding`.
+  - `logger` option on `BrowserType.connect` and `BrowserType.connectOverCDP` — use [tracing](./trace-viewer.md) instead.
+  - Context options `videosPath` / `videoSize` — use `recordVideo` instead.
+
+### Browser Versions
+
+- Chromium 148.0.7778.96
+- Mozilla Firefox 150.0.2
+- WebKit 26.4
+
+This version was also tested against the following stable channels:
+
+- Google Chrome 147
+- Microsoft Edge 147
+
+
+## Version 1.59
+
+### 🎬 Screencast
+
+New [`property: Page.screencast`] API provides a unified interface for capturing page content with:
+- Screencast recordings
+- Action annotations
+- Visual overlays
+- Real-time frame capture
+- Agentic video receipts
+
+<center>
+<img src="https://raw.githubusercontent.com/microsoft/playwright/main/docs/src/images/release-notes-1.59-screencast-demo.gif" alt="Demo" width="500" height="313" />
+</center>
+
+
+**Screencast recording** — record video with precise start/stop control, as an alternative to the [`option: Browser.newContext.recordVideo`] option:
+
+```js
+await page.screencast.start({ path: 'video.webm' });
+// ... perform actions ...
+await page.screencast.stop();
+```
+
+**Action annotations** — enable built-in visual annotations that highlight interacted elements and display action titles during recording:
+
+```js
+await page.screencast.showActions({ position: 'top-right' });
+```
+
+[`method: Screencast.showActions`] accepts `position` (`'top-left'`, `'top'`, `'top-right'`, `'bottom-left'`, `'bottom'`, `'bottom-right'`), `duration` (ms per annotation), and `fontSize` (px). Returns a disposable to stop showing actions.
+
+Action annotations can also be enabled in test fixtures via the `video` option:
+
+```js
+// playwright.config.ts
+export default defineConfig({
+  use: {
+    video: {
+      mode: 'on',
+      show: {
+        actions: { position: 'top-left' },
+        test: { position: 'top-right' },
+      },
+    },
+  },
+});
+```
+
+**Visual overlays** — add chapter titles and custom HTML overlays on top of the page for richer narration:
+
+```js
+await page.screencast.showChapter('Adding TODOs', {
+  description: 'Type and press enter for each TODO',
+  duration: 1000,
+});
+
+await page.screencast.showOverlay('<div style="color: red">Recording</div>');
+```
+
+**Real-time frame capture** — stream JPEG-encoded frames for custom processing like thumbnails, live previews, AI vision, and more:
+
+```js
+await page.screencast.start({
+  onFrame: ({ data }) => sendToVisionModel(data),
+  size: { width: 800, height: 600 },
+});
+```
+
+**Agentic video receipts** — coding agents can produce video evidence of their work. After completing a task, an agent can record a walkthrough video with rich annotations for human review:
+
+```js
+await page.screencast.start({ path: 'receipt.webm' });
+await page.screencast.showActions({ position: 'top-right' });
+
+await page.screencast.showChapter('Verifying checkout flow', {
+  description: 'Added coupon code support per ticket #1234',
+});
+
+// Agent performs the verification steps...
+await page.locator('#coupon').fill('SAVE20');
+await page.locator('#apply-coupon').click();
+await expect(page.locator('.discount')).toContainText('20%');
+
+await page.screencast.showChapter('Done', {
+  description: 'Coupon applied, discount reflected in total',
+});
+
+await page.screencast.stop();
+```
+
+The resulting video serves as a receipt: chapter titles provide context, action annotations highlight each interaction, and the visual walkthrough is faster to review than text logs.
+
+### 🔗 Interoperability
+
+New [`method: Browser.bind`] API makes a launched browser available for `playwright-cli`, `@playwright/mcp`, and other clients to connect to.
+
+**Bind a browser** — start a browser and bind it so others can connect:
+
+```js
+const { endpoint } = await browser.bind('my-session', {
+  workspaceDir: '/my/project',
+});
+```
+
+**Connect from playwright-cli** — connect to the running browser from your favorite coding agent.
+
+```bash
+playwright-cli attach my-session
+playwright-cli -s my-session snapshot
+```
+
+**Connect from @playwright/mcp** — or point your MCP server to the running browser.
+
+```bash
+@playwright/mcp --endpoint=my-session
+```
+
+**Connect from a Playwright client** — use API to connect to the browser. Multiple clients at a time are supported!
+
+```js
+const browser = await chromium.connect(endpoint);
+```
+
+Pass `host` and `port` options to bind over WebSocket instead of a named pipe:
+
+```js
+const { endpoint } = await browser.bind('my-session', {
+  host: 'localhost',
+  port: 0,
+});
+// endpoint is a ws:// URL
+```
+
+Call [`method: Browser.unbind`] to stop accepting new connections.
+
+### 📊 Observability
+
+Run `playwright-cli show` to open the Dashboard that lists all the bound browsers, their statuses, and allows interacting with them:
+- See what your agent is doing on the background browsers
+- Click into the sessions for manual interventions
+- Open DevTools to inspect pages from the background browsers.
+
+<center>
+<img src="https://raw.githubusercontent.com/microsoft/playwright/main/docs/src/images/release-notes-1.59-dashboard.png" alt="Demo" width="1169" height="835" />
+</center>
+
+- `playwright-cli` binds all of its browsers automatically, so you can see what your agents are doing.
+- Pass `PLAYWRIGHT_DASHBOARD=1` env variable to see all `@playwright/test` browsers in the dashboard.
+
+### 🐛 CLI debugger for agents
+
+Coding agents can now run `npx playwright test --debug=cli` to attach and debug tests over `playwright-cli` — perfect for automatically fixing tests in agentic workflows:
+
+```bash
+$ npx playwright test --debug=cli
+### Debugging Instructions
+- Run "playwright-cli attach tw-87b59e" to attach to this test
+
+$ playwright-cli attach tw-87b59e
+### Session `tw-87b59e` created, attached to `tw-87b59e`.
+Run commands with: playwright-cli --session=tw-87b59e <command>
+### Paused
+- Navigate to "/" at output/tests/example.spec.ts:4
+
+$ playwright-cli --session tw-87b59e step-over
+### Page
+- Page URL: https://playwright.dev/
+- Page Title: Fast and reliable end-to-end testing for modern web apps | Playwright
+### Paused
+- Expect "toHaveTitle" at output/tests/example.spec.ts:7
+```
+
+### 📋 CLI trace analysis for agents
+
+Coding agents can run `npx playwright trace` to explore [Playwright Trace](./trace-viewer.md) and understand failing or flaky tests from the command line:
+
+```bash
+$ npx playwright trace open test-results/example-has-title-chromium/trace.zip
+  Title:        example.spec.ts:3 › has title
+
+$ npx playwright trace actions --grep="expect"
+     # Time       Action                                                  Duration
+  ──── ─────────  ─────────────────────────────────────────────────────── ────────
+    9. 0:00.859  Expect "toHaveTitle"                                        5.1s  ✗
+
+$ npx playwright trace action 9
+  Expect "toHaveTitle"
+  Error: expect(page).toHaveTitle(expected) failed
+    Expected pattern: /Wrong Title/
+    Received string:  "Fast and reliable end-to-end testing for modern web apps | Playwright"
+    Timeout: 5000ms
+  Snapshots
+    available: before, after
+    usage:     npx playwright trace snapshot 9 --name <before|after>
+
+$ npx playwright trace snapshot 9 --name after
+### Page
+- Page Title: Fast and reliable end-to-end testing for modern web apps | Playwright
+
+$ npx playwright trace close
+```
+
+### ♻️ `await using`
+
+Many APIs now return [async disposables](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose), enabling the `await using` syntax for automatic cleanup:
+
+```js
+await using page = await context.newPage();
+{
+  await using route = await page.route('**/*', route => route.continue());
+  await using script = await page.addInitScript('console.log("init script here")');
+  await page.goto('https://playwright.dev');
+  // do something
+}
+// route and init script have been removed at this point
+```
+
+### 🔍 Snapshots and Locators
+
+- Method [`method: Page.ariaSnapshot`] to capture the aria snapshot of the page — equivalent to `page.locator('body').ariaSnapshot()`.
+- Options `depth` and `mode` in [`method: Locator.ariaSnapshot`].
+- Method [`method: Locator.normalize`] converts a locator to follow best practices like test ids and aria roles.
+- Method [`method: Page.pickLocator`] enters an interactive mode where hovering over elements highlights them and shows the corresponding locator. Click an element to get its [Locator] back. Use [`method: Page.cancelPickLocator`] to cancel.
+
+### New APIs
+
+#### Screencast
+
+- [`property: Page.screencast`] provides video recording, real-time frame streaming, and overlay management.
+- Methods [`method: Screencast.start`] and [`method: Screencast.stop`] for recording and frame capture.
+- Methods [`method: Screencast.showActions`] and [`method: Screencast.hideActions`] for action annotations.
+- Methods [`method: Screencast.showChapter`] and [`method: Screencast.showOverlay`] for visual overlays.
+- Methods [`method: Screencast.showOverlays`] and [`method: Screencast.hideOverlays`] for overlay visibility control.
+
+#### Storage, Console and Errors
+
+- Method [`method: BrowserContext.setStorageState`] clears existing cookies, local storage, and IndexedDB for all origins and sets a new storage state — no need to create a new context.
+- Methods [`method: Page.clearConsoleMessages`] and [`method: Page.clearPageErrors`] to clear stored messages and errors.
+- Option `filter` in [`method: Page.consoleMessages`] and [`method: Page.pageErrors`] controls which messages are returned.
+- Method [`method: ConsoleMessage.timestamp`].
+
+#### Miscellaneous
+
+- [`property: BrowserContext.debugger`] provides programmatic control over the Playwright debugger.
+- Method [`method: BrowserContext.isClosed`].
+- Method [`method: Request.existingResponse`] returns the response without waiting.
+- Method [`method: Response.httpVersion`] returns the HTTP version used by the response.
+- Events [`event: CDPSession.event`] and [`event: CDPSession.close`] for CDP sessions.
+- Option `live` in [`method: Tracing.start`] for real-time trace updates.
+- Option `artifactsDir` in [`method: BrowserType.launch`] to configure the artifacts directory.
+
+### 🛠️ Other improvements
+
+- UI Mode has an option to only show tests affected by source changes.
+- UI Mode and Trace Viewer have improved action filtering.
+- HTML Reporter shows the list of runs from the same worker.
+- HTML Reporter allows filtering test steps for quick search.
+- New trace mode `'retain-on-failure-and-retries'` records a trace for each test run and retains all traces when an attempt fails — great for comparing a passing trace with a failing one from a flaky test.
+
+### Breaking Changes ⚠️
+
+- Removed macOS 14 support for WebKit. We recommend upgrading your macOS version, or keeping an older Playwright version.
+- Removed `@playwright/experimental-ct-svelte` package.
+- `junit` test reporter now differentiates between types of errors, so some of the previous `<failure>`s are now reported as `<error>`s.
+
+### Browser Versions
+
+- Chromium 147.0.7727.15
+- Mozilla Firefox 148.0.2
+- WebKit 26.4
+
+This version was also tested against the following stable channels:
+
+- Google Chrome 146
+- Microsoft Edge 146
+
+
 ## Version 1.58
 
 ### Timeline
@@ -62,7 +447,7 @@ Take a look at yours - maybe you'll find some tests that are spending a longer t
 
 ### Chrome for Testing
 
-Starting with this release, Playwright switches from Chromium, to using [Chrome for Testing](https://developer.chrome.com/blog/chrome-for-testing/) builds. Both headed and headless browsers are subject to this. Your tests should still be passing after upgrading to Playwright 1.57.
+Playwright now runs on [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) builds rather than Chromium. Headed mode uses `chrome`; headless mode uses `chrome-headless-shell`. Existing tests should continue to pass after upgrading to v1.57.
 
 We're expecting no functional changes to come from this switch. The biggest change is the new icon and title in your toolbar.
 
@@ -3200,7 +3585,7 @@ List of all new assertions:
 - [`expect(locator).toHaveAttribute(name, value)`](./api/class-locatorassertions#locator-assertions-to-have-attribute)
 - [`expect(locator).toHaveClass(expected)`](./api/class-locatorassertions#locator-assertions-to-have-class)
 - [`expect(locator).toHaveCount(count)`](./api/class-locatorassertions#locator-assertions-to-have-count)
-- [`expect(locator).toHaveCSS(name, value)`](./api/class-locatorassertions#locator-assertions-to-have-css-1)
+- [`expect(locator).toHaveCSS(name, value)`](./api/class-locatorassertions#locator-assertions-to-have-css)
 - [`expect(locator).toHaveId(id)`](./api/class-locatorassertions#locator-assertions-to-have-id)
 - [`expect(locator).toHaveJSProperty(name, value)`](./api/class-locatorassertions#locator-assertions-to-have-js-property)
 - [`expect(locator).toHaveText(expected, options)`](./api/class-locatorassertions#locator-assertions-to-have-text)

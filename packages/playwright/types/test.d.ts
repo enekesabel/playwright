@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-import type { APIRequestContext, Browser, BrowserContext, BrowserContextOptions, Page, PageAgent, LaunchOptions, ViewportSize, Geolocation, HTTPCredentials, Locator, APIResponse, PageScreenshotOptions } from 'playwright-core';
+import type { APIRequestContext, Browser, BrowserContext, BrowserContextOptions, Page, LaunchOptions, ViewportSize, Geolocation, HTTPCredentials, Locator, APIResponse, PageScreenshotOptions } from 'playwright-core';
 export * from 'playwright-core';
 
 export type BlobReporterOptions = { outputDir?: string, fileName?: string };
-export type ListReporterOptions = { printSteps?: boolean };
-export type JUnitReporterOptions = { outputFile?: string, stripANSIControlSequences?: boolean, includeProjectInTestName?: boolean };
+export type ListReporterOptions = { printSteps?: boolean, printFailuresInline?: boolean };
+export type JUnitReporterOptions = { outputFile?: string, stripANSIControlSequences?: boolean, includeProjectInTestName?: boolean, includeRetries?: boolean };
 export type JsonReporterOptions = { outputFile?: string };
 export type HtmlReporterOptions = {
   outputFolder?: string;
@@ -31,6 +31,7 @@ export type HtmlReporterOptions = {
   title?: string;
   noSnippets?: boolean;
   noCopyPrompt?: boolean;
+  doNotInlineAssets?: boolean;
 };
 
 export type ReporterDescription = Readonly<
@@ -128,6 +129,54 @@ interface TestProject<TestArgs = {}, WorkerArgs = {}> {
    * all projects.
    */
   use?: UseOptions<TestArgs, WorkerArgs>;
+  /**
+   * Launch a development web server (or multiple) before running tests in this project. See
+   * [testConfig.webServer](https://playwright.dev/docs/api/class-testconfig#test-config-web-server) for the shape of
+   * each entry.
+   *
+   * A per-project `webServer` is only launched when the project is selected (either directly via `--project` or
+   * indirectly through dependencies). This is useful when only a subset of your projects need a local backend, while
+   * others run against a deployed environment.
+   *
+   * Per-project web servers are launched in addition to any top-level
+   * [testConfig.webServer](https://playwright.dev/docs/api/class-testconfig#test-config-web-server).
+   *
+   * **Usage**
+   *
+   * ```js
+   * // playwright.config.ts
+   * import { defineConfig } from '@playwright/test';
+   *
+   * export default defineConfig({
+   *   projects: [
+   *     {
+   *       name: 'functional',
+   *       grepInvert: /@smoke/,
+   *       use: { baseURL: 'http://localhost:3000' },
+   *       webServer: [
+   *         {
+   *           command: 'npm run start',
+   *           url: 'http://localhost:3000',
+   *           reuseExistingServer: !process.env.CI,
+   *         },
+   *         {
+   *           command: 'npm run mock-server',
+   *           port: 3001,
+   *           reuseExistingServer: !process.env.CI,
+   *         },
+   *       ],
+   *     },
+   *     {
+   *       name: 'smoke',
+   *       grep: /@smoke/,
+   *       use: { baseURL: 'https://production.app.com' },
+   *     },
+   *   ],
+   * });
+   * ```
+   *
+   */
+  webServer?: TestConfigWebServer | TestConfigWebServer[];
   /**
    * List of projects that need to run before any test in this project runs. Dependencies can be useful for configuring
    * the global setup actions in a way that every action is in a form of a test. Passing `--no-deps` argument ignores
@@ -236,6 +285,13 @@ interface TestProject<TestArgs = {}, WorkerArgs = {}> {
        * for details.
        */
       pathTemplate?: string;
+
+      /**
+       * Default timeout for
+       * [expect(page).toHaveScreenshot(name[, options])](https://playwright.dev/docs/api/class-pageassertions#page-assertions-to-have-screenshot-1)
+       * in milliseconds, defaults to the global expect timeout. Setting to `0` disables the timeout.
+       */
+      timeout?: number;
     };
 
     /**
@@ -250,6 +306,13 @@ interface TestProject<TestArgs = {}, WorkerArgs = {}> {
        * for details.
        */
       pathTemplate?: string;
+
+      /**
+       * Controls how children of the snapshot root are matched against the actual accessibility tree. This is equivalent to
+       * adding a `/children` property at the top of every aria snapshot template. Individual snapshots can override this by
+       * including an explicit `/children` property.
+       */
+      children?: "contain"|"equal"|"deep-equal";
     };
 
     /**
@@ -521,6 +584,8 @@ interface TestProject<TestArgs = {}, WorkerArgs = {}> {
    *     config)
    * - `{testFileDir}` - Directories in relative path from `testDir` to **test file**.
    *   - Value: `page`
+   * - `{testFileBaseName}` - Test file name without the last extension.
+   *   - Value: `page-click.spec`
    * - `{testFileName}` - Test file name with extension.
    *   - Value: `page-click.spec.ts`
    * - `{testFilePath}` - Relative path from `testDir` to **test file**.
@@ -1181,6 +1246,13 @@ interface TestConfig<TestArgs = {}, WorkerArgs = {}> {
        * for details.
        */
       pathTemplate?: string;
+
+      /**
+       * Controls how children of the snapshot root are matched against the actual accessibility tree. This is equivalent to
+       * adding a `/children` property at the top of every aria snapshot template. Individual snapshots can override this by
+       * including an explicit `/children` property.
+       */
+      children?: "contain"|"equal"|"deep-equal";
     };
 
     /**
@@ -1617,14 +1689,6 @@ interface TestConfig<TestArgs = {}, WorkerArgs = {}> {
   retries?: number;
 
   /**
-   * Whether to run LLM agent for [PageAgent](https://playwright.dev/docs/api/class-pageagent):
-   * - "all" disregards existing cache and performs all actions via LLM
-   * - "missing" only performs actions that don't have generated cache actions
-   * - "none" does not talk to LLM at all, relies on the cached actions (default)
-   */
-  runAgents?: "all"|"missing"|"none";
-
-  /**
    * Shard tests and execute only the selected shard. Specify in the one-based form like `{ total: 5, current: 2 }`.
    *
    * Learn more about [parallelism and sharding](https://playwright.dev/docs/test-parallel) with Playwright Test.
@@ -1763,6 +1827,8 @@ interface TestConfig<TestArgs = {}, WorkerArgs = {}> {
    *     config)
    * - `{testFileDir}` - Directories in relative path from `testDir` to **test file**.
    *   - Value: `page`
+   * - `{testFileBaseName}` - Test file name without the last extension.
+   *   - Value: `page-click.spec`
    * - `{testFileName}` - Test file name with extension.
    *   - Value: `page-click.spec.ts`
    * - `{testFilePath}` - Relative path from `testDir` to **test file**.
@@ -2001,9 +2067,23 @@ export interface FullConfig<TestArgs = {}, WorkerArgs = {}> {
    */
   webServer: TestConfigWebServer | null;
   /**
+   * Snapshot of [`process.argv`](https://nodejs.org/api/process.html#processargv) captured in the runner process.
+   * Useful for reading custom command-line arguments — for example, args supplied after the `--` separator (`npx
+   * playwright test -- --build-path=./out`). Playwright does not parse these; consumers are responsible for slicing and
+   * interpreting them with any argument-parsing library.
+   */
+  argv: Array<string>;
+
+  /**
    * Path to the configuration file used to run the tests. The value is an empty string if no config file was used.
    */
   configFile?: string;
+
+  /**
+   * See
+   * [testConfig.failOnFlakyTests](https://playwright.dev/docs/api/class-testconfig#test-config-fail-on-flaky-tests).
+   */
+  failOnFlakyTests: boolean;
 
   /**
    * See [testConfig.forbidOnly](https://playwright.dev/docs/api/class-testconfig#test-config-forbid-only).
@@ -2079,14 +2159,6 @@ export interface FullConfig<TestArgs = {}, WorkerArgs = {}> {
    * Base directory for all relative paths used in the reporters.
    */
   rootDir: string;
-
-  /**
-   * Whether to run LLM agent for [PageAgent](https://playwright.dev/docs/api/class-pageagent):
-   * - "all" disregards existing cache and performs all actions via LLM
-   * - "missing" only performs actions that don't have generated cache actions
-   * - "none" does not talk to LLM at all, relies on the cached actions (default)
-   */
-  runAgents: "all"|"missing"|"none";
 
   /**
    * See [testConfig.shard](https://playwright.dev/docs/api/class-testconfig#test-config-shard).
@@ -2671,7 +2743,7 @@ export type TestDetails = {
   annotation?: TestDetailsAnnotation | TestDetailsAnnotation[];
 }
 
-type TestBody<TestArgs> = (args: TestArgs, testInfo: TestInfo) => Promise<void> | void;
+type TestBody<TestArgs> = (args: TestArgs, testInfo: TestInfo) => Promise<unknown> | unknown;
 type ConditionBody<TestArgs> = (args: TestArgs) => boolean;
 
 /**
@@ -5533,6 +5605,29 @@ export interface TestType<TestArgs extends {}, WorkerArgs extends {}> {
   }
 
   /**
+   * Aborts the currently running test by throwing an error. The test is immediately marked as failed and execution
+   * stops. This is useful from inside a fixture or a route handler when you have detected an unrecoverable misuse and
+   * want to fail the test right away.
+   *
+   * **Usage**
+   *
+   * ```js
+   * import { test, expect } from '@playwright/test';
+   *
+   * test('does not publish to shared page', async ({ page }) => {
+   *   await page.route('**\/publish', route => {
+   *     test.abort('Tests must not publish to the shared page. Use the `clone` option.');
+   *     return route.abort();
+   *   });
+   *   // ...
+   * });
+   * ```
+   *
+   * @param message Optional message describing the reason for the abort. It will be included in the failure error.
+   */
+  abort(message?: string): never;
+
+  /**
    * Marks a test as "slow". Slow test will be given triple the default timeout.
    *
    * Note that [test.slow([condition, callback, description])](https://playwright.dev/docs/api/class-test#test-slow)
@@ -6903,6 +6998,9 @@ export interface PlaywrightWorkerOptions {
    * - `'retain-on-failure'`: Record trace for each test. When test run passes, remove the recorded trace.
    * - `'retain-on-first-failure'`: Record trace for the first run of each test, but not for retries. When test run
    *   passes, remove the recorded trace.
+   * - `'retain-on-failure-and-retries'`: Record trace for each test run. Retains all traces when an attempt fails.
+   * - `'retain-all-failures'`: Record trace for each test run. Retains the trace only for attempts that failed,
+   *   regardless of the final test outcome.
    *
    * For more control, pass an object that specifies `mode` and trace features to enable.
    *
@@ -6934,6 +7032,10 @@ export interface PlaywrightWorkerOptions {
    * down to fit into 800x800. If `viewport` is not configured explicitly the video size defaults to 800x450. Actual
    * picture of each page will be scaled down if necessary to fit the specified size.
    *
+   * To annotate actions in the video, pass `show` with `action` and/or `test` sub-options. The `action` option controls
+   * visual highlights on interacted elements with an optional `delay` in milliseconds (defaults to `500`). The `test`
+   * option controls which test information is displayed as a status overlay.
+   *
    * **Usage**
    *
    * ```js
@@ -6949,31 +7051,12 @@ export interface PlaywrightWorkerOptions {
    *
    * Learn more about [recording video](https://playwright.dev/docs/test-use-options#recording-options).
    */
-  video: VideoMode | /** deprecated */ 'retry-with-video' | { mode: VideoMode, size?: ViewportSize };
+  video: VideoMode | /** deprecated */ 'retry-with-video' | { mode: VideoMode, size?: ViewportSize, show?: { actions?: { duration?: number, position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right', fontSize?: number }, test?: { level?: 'file' | 'title' | 'step', position?: 'top-left' | 'top' | 'top-right' | 'bottom-left' | 'bottom' | 'bottom-right', fontSize?: number } } };
 }
 
 export type ScreenshotMode = 'off' | 'on' | 'only-on-failure' | 'on-first-failure';
-export type TraceMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry' | 'on-all-retries' | 'retain-on-first-failure';
+export type TraceMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry' | 'on-all-retries' | 'retain-on-first-failure' | 'retain-on-failure-and-retries' | 'retain-all-failures';
 export type VideoMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry';
-export type AgentOptions = {
-  provider?: {
-    api: 'openai' | 'openai-compatible' | 'anthropic' | 'google';
-    apiEndpoint?: string;
-    apiKey: string;
-    apiTimeout?: number;
-    model: string;
-  },
-  limits?: {
-    maxTokens?: number;
-    maxActions?: number;
-    maxActionRetries?: number;
-  };
-  cachePathTemplate?: string;
-  runAgents?: 'all' | 'missing' | 'none';
-  secrets?: { [key: string]: string };
-  systemPrompt?: string;
-};
-
 /**
  * Playwright Test provides many options to configure test environment,
  * [Browser](https://playwright.dev/docs/api/class-browser),
@@ -7013,7 +7096,6 @@ export type AgentOptions = {
  *
  */
 export interface PlaywrightTestOptions {
-  agentOptions: AgentOptions | undefined;
   /**
    * Whether to automatically download all the attachments. Defaults to `true` where all the downloads are accepted.
    *
@@ -7563,7 +7645,7 @@ export interface PlaywrightTestOptions {
   /**
    * Custom attribute to be used in
    * [page.getByTestId(testId)](https://playwright.dev/docs/api/class-page#page-get-by-test-id). `data-testid` is used
-   * by default.
+   * by default. To match elements with any of several attributes, pass them as a comma-separated list.
    *
    * **Usage**
    *
@@ -7574,6 +7656,19 @@ export interface PlaywrightTestOptions {
    * export default defineConfig({
    *   use: {
    *     testIdAttribute: 'pw-test-id',
+   *   },
+   * });
+   * ```
+   *
+   * Multiple attributes:
+   *
+   * ```js
+   * // playwright.config.ts
+   * import { defineConfig } from '@playwright/test';
+   *
+   * export default defineConfig({
+   *   use: {
+   *     testIdAttribute: 'data-pw,data-ti',
    *   },
    * });
    * ```
@@ -7723,7 +7818,6 @@ export interface PlaywrightTestArgs {
    *
    */
   request: APIRequestContext;
-  agent: PageAgent;
 }
 
 type ExcludeProps<A, B> = {
@@ -7736,7 +7830,7 @@ export type PlaywrightTestConfig<TestArgs = {}, WorkerArgs = {}> = Config<Playwr
 
 // Use the global URLPattern type if available (Node.js 22+, modern browsers),
 // otherwise fall back to `never` so it disappears from union types.
-type URLPattern = typeof globalThis extends { URLPattern: infer T } ? T : never;
+type URLPattern = typeof globalThis extends { URLPattern: new (...args: any) => infer T } ? T : never;
 type AsymmetricMatcher = Record<string, any>;
 
 interface AsymmetricMatchers {
@@ -7937,6 +8031,34 @@ interface GenericAssertions<R> {
    *
    */
   not: GenericAssertions<R>;
+  /**
+   * Use `resolves` to unwrap the value of a fulfilled promise so any other matcher can be chained. If the promise is
+   * rejected the assertion fails.
+   *
+   * For example, this code tests that the promise resolves and that the resulting value is `'lemon'`:
+   *
+   * ```js
+   * test('resolves to lemon', async () => {
+   *   await expect(Promise.resolve('lemon')).resolves.toBe('lemon');
+   * });
+   * ```
+   *
+   */
+  resolves: GenericAssertions<R>;
+  /**
+   * Use `.rejects` to unwrap the reason of a rejected promise so any other matcher can be chained. If the promise is
+   * fulfilled the assertion fails.
+   *
+   * For example, this code tests that the promise rejects with reason `'octopus'`:
+   *
+   * ```js
+   * test('rejects to octopus', async () => {
+   *   await expect(Promise.reject(new Error('octopus'))).rejects.toThrow('octopus');
+   * });
+   * ```
+   *
+   */
+  rejects: GenericAssertions<R>;
   /**
    * Compares value with
    * [`expected`](https://playwright.dev/docs/api/class-genericassertions#generic-assertions-to-be-option-expected) by
@@ -8403,7 +8525,206 @@ type FunctionAssertions = {
   toPass(options?: { timeout?: number, intervals?: number[] }): Promise<void>;
 };
 
-type CSSStyleProperties = { [k in Exclude<keyof CSSStyleDeclaration, 'parentRule' | number>]?: CSSStyleDeclaration[k] extends Function ? never : CSSStyleDeclaration[k] };
+type BaseMatchers<R, T> = GenericAssertions<R> & PlaywrightTest.Matchers<R, T> & SnapshotAssertions;
+type AllowedGenericMatchers<R, T> = PlaywrightTest.Matchers<R, T> & Pick<GenericAssertions<R>, 'toBe' | 'toBeDefined' | 'toBeFalsy' | 'toBeNull' | 'toBeTruthy' | 'toBeUndefined'>;
+
+type SpecificMatchers<R, T> =
+  T extends Page ? PageAssertions & AllowedGenericMatchers<R, T> :
+  T extends Locator ? LocatorAssertions & AllowedGenericMatchers<R, T> :
+  T extends APIResponse ? APIResponseAssertions & AllowedGenericMatchers<R, T> :
+  BaseMatchers<R, T> & (T extends Function ? FunctionAssertions : {});
+type AllMatchers<R, T> = PageAssertions & LocatorAssertions & APIResponseAssertions & FunctionAssertions & BaseMatchers<R, T>;
+
+type IfAny<T, Y, N> = 0 extends (1 & T) ? Y : N;
+type Awaited<T> = T extends PromiseLike<infer U> ? U : T;
+type ToUserMatcher<F, DefaultReturnType> = F extends (first: any, ...args: infer Rest) => infer R ? (...args: Rest) => (R extends PromiseLike<infer U> ? Promise<void> : DefaultReturnType) : never;
+type ToUserMatcherObject<T, DefaultReturnType, ArgType> = {
+  [K in keyof T as T[K] extends (arg: ArgType, ...rest: any[]) => any ? K : never]: ToUserMatcher<T[K], DefaultReturnType>;
+};
+
+type MatcherHintColor = (arg: string) => string;
+
+export type MatcherHintOptions = {
+  comment?: string;
+  expectedColor?: MatcherHintColor;
+  isDirectExpectCall?: boolean;
+  isNot?: boolean;
+  promise?: string;
+  receivedColor?: MatcherHintColor;
+  secondArgument?: string;
+  secondArgumentColor?: MatcherHintColor;
+};
+
+export interface ExpectMatcherUtils {
+  matcherHint(matcherName: string, received: unknown, expected: unknown, options?: MatcherHintOptions): string;
+  printDiffOrStringify(expected: unknown, received: unknown, expectedLabel: string, receivedLabel: string, expand: boolean): string;
+  printExpected(value: unknown): string;
+  printReceived(object: unknown): string;
+  printWithType<T>(name: string, value: T, print: (value: T) => string): string;
+  diff(a: unknown, b: unknown): string | null;
+  stringify(object: unknown, maxDepth?: number, maxWidth?: number): string;
+}
+
+export type ExpectMatcherState = {
+  /**
+   * Whether this matcher was called with the negated .not modifier.
+   */
+  isNot: boolean;
+  /**
+   * - 'rejects' if matcher was called with the promise .rejects modifier
+   * - 'resolves' if matcher was called with the promise .resolves modifier
+   * - '' if matcher was not called with a promise modifier
+   */
+  promise: 'rejects' | 'resolves' | '';
+  utils: ExpectMatcherUtils;
+  /**
+   * Timeout in milliseconds for the assertion to be fulfilled.
+   */
+  timeout: number;
+};
+
+export type MatcherReturnType = {
+  message: () => string;
+  pass: boolean;
+  name?: string;
+  expected?: unknown;
+  actual?: any;
+  log?: string[];
+  timeout?: number;
+};
+
+type MakeMatchers<R, T, ExtendedMatchers> = {
+  /**
+   * If you know how to test something, `.not` lets you test its opposite.
+   */
+  not: MakeMatchers<R, T, ExtendedMatchers>;
+  /**
+   * Use resolves to unwrap the value of a fulfilled promise so any other
+   * matcher can be chained. If the promise is rejected the assertion fails.
+   */
+  resolves: MakeMatchers<Promise<R>, Awaited<T>, ExtendedMatchers>;
+  /**
+   * Unwraps the reason of a rejected promise so any other matcher can be chained.
+   * If the promise is fulfilled the assertion fails.
+   */
+  rejects: MakeMatchers<Promise<R>, any, ExtendedMatchers>;
+} & IfAny<T, AllMatchers<R, T>, SpecificMatchers<R, T> & ToUserMatcherObject<ExtendedMatchers, R, T>>;
+
+type PollMatchers<R, T, ExtendedMatchers> = {
+  /**
+   * If you know how to test something, `.not` lets you test its opposite.
+   */
+  not: PollMatchers<R, T, ExtendedMatchers>;
+} & BaseMatchers<R, T> & ToUserMatcherObject<ExtendedMatchers, R, T>;
+
+export type Expect<ExtendedMatchers = {}> = {
+  <T = unknown>(actual: T, messageOrOptions?: string | { message?: string }): MakeMatchers<void, T, ExtendedMatchers>;
+  soft: Expect<ExtendedMatchers>;
+  poll: <T = unknown>(actual: () => T | Promise<T>, messageOrOptions?: string | { message?: string, timeout?: number, intervals?: number[] }) => PollMatchers<Promise<void>, T, ExtendedMatchers>;
+  extend<MoreMatchers extends Record<string, (this: ExpectMatcherState, receiver: any, ...args: any[]) => MatcherReturnType | Promise<MatcherReturnType>>>(matchers: MoreMatchers): Expect<ExtendedMatchers & MoreMatchers>;
+  configure: (configuration: {
+    message?: string,
+    timeout?: number,
+    soft?: boolean,
+  }) => Expect<ExtendedMatchers>;
+  getState(): unknown;
+  not: Omit<AsymmetricMatchers, 'any' | 'anything'>;
+} & AsymmetricMatchers;
+
+// --- BEGINGLOBAL ---
+declare global {
+  export namespace PlaywrightTest {
+    export interface Matchers<R, T = unknown> {
+    }
+  }
+}
+// --- ENDGLOBAL ---
+
+/**
+ * These tests are executed in Playwright environment that launches the browser
+ * and provides a fresh page to each test.
+ */
+export const test: TestType<PlaywrightTestArgs & PlaywrightTestOptions, PlaywrightWorkerArgs & PlaywrightWorkerOptions>;
+export default test;
+
+export const _baseTest: TestType<{}, {}>;
+export const expect: Expect<{}>;
+
+/**
+ * Defines Playwright config
+ */
+export function defineConfig(config: PlaywrightTestConfig): PlaywrightTestConfig;
+export function defineConfig<T>(config: PlaywrightTestConfig<T>): PlaywrightTestConfig<T>;
+export function defineConfig<T, W>(config: PlaywrightTestConfig<T, W>): PlaywrightTestConfig<T, W>;
+export function defineConfig(config: PlaywrightTestConfig, ...configs: PlaywrightTestConfig[]): PlaywrightTestConfig;
+export function defineConfig<T>(config: PlaywrightTestConfig<T>, ...configs: PlaywrightTestConfig<T>[]): PlaywrightTestConfig<T>;
+export function defineConfig<T, W>(config: PlaywrightTestConfig<T, W>, ...configs: PlaywrightTestConfig<T, W>[]): PlaywrightTestConfig<T, W>;
+
+type MergedT<List> = List extends [TestType<infer T, any>, ...(infer Rest)] ? T & MergedT<Rest> : {};
+type MergedW<List> = List extends [TestType<any, infer W>, ...(infer Rest)] ? W & MergedW<Rest> : {};
+type MergedTestType<List> = TestType<MergedT<List>, MergedW<List>>;
+
+/**
+ * Merges fixtures
+ */
+export function mergeTests<List extends any[]>(...tests: List): MergedTestType<List>;
+
+type MergedExpectMatchers<List> = List extends [Expect<infer M>, ...(infer Rest)] ? M & MergedExpectMatchers<Rest> : {};
+type MergedExpect<List> = Expect<MergedExpectMatchers<List>>;
+
+/**
+ * Merges expects
+ */
+export function mergeExpects<List extends any[]>(...expects: List): MergedExpect<List>;
+
+// This is required to not export everything by default. See https://github.com/Microsoft/TypeScript/issues/19545#issuecomment-340490459
+export { };
+
+
+
+/**
+ * The [APIResponseAssertions](https://playwright.dev/docs/api/class-apiresponseassertions) class provides assertion
+ * methods that can be used to make assertions about the
+ * [APIResponse](https://playwright.dev/docs/api/class-apiresponse) in the tests.
+ *
+ * ```js
+ * import { test, expect } from '@playwright/test';
+ *
+ * test('navigates to login', async ({ page }) => {
+ *   // ...
+ *   const response = await page.request.get('https://playwright.dev');
+ *   await expect(response).toBeOK();
+ * });
+ * ```
+ *
+ */
+interface APIResponseAssertions {
+  /**
+   * Ensures the response status code is within `200..299` range.
+   *
+   * **Usage**
+   *
+   * ```js
+   * await expect(response).toBeOK();
+   * ```
+   *
+   */
+  toBeOK(): Promise<void>;
+
+  /**
+   * Makes the assertion check for the opposite condition.
+   *
+   * **Usage**
+   *
+   * For example, this code tests that the response status is not successful:
+   *
+   * ```js
+   * await expect(response).not.toBeOK();
+   * ```
+   *
+   */
+  not: APIResponseAssertions;
+}
 
 /**
  * The [LocatorAssertions](https://playwright.dev/docs/api/class-locatorassertions) class provides assertion methods
@@ -8422,41 +8743,6 @@ type CSSStyleProperties = { [k in Exclude<keyof CSSStyleDeclaration, 'parentRule
  *
  */
 interface LocatorAssertions {
-  /**
-   * Ensures the [Locator](https://playwright.dev/docs/api/class-locator) resolves to an element with the given computed
-   * CSS style.
-   *
-   * **Usage**
-   *
-   * ```js
-   * const locator = page.getByRole('button');
-   * await expect(locator).toHaveCSS('display', 'flex');
-   * ```
-   *
-   * @param name CSS property name.
-   * @param value CSS property value.
-   * @param options
-   */
-  toHaveCSS(name: string, value: string|RegExp, options?: { timeout?: number }): Promise<void>;
-  /**
-   * Ensures the [Locator](https://playwright.dev/docs/api/class-locator) resolves to an element with the given computed
-   * CSS properties. Only the listed properties are checked.
-   *
-   * **Usage**
-   *
-   * ```js
-   * const locator = page.getByRole('button');
-   * await expect(locator).toHaveCSS({
-   *   display: 'flex',
-   *   backgroundColor: 'rgb(255, 0, 0)'
-   * });
-   * ```
-   *
-   * @param styles CSS properties object. See
-   * [CSSStyleProperties](https://developer.mozilla.org/en-US/docs/Web/API/CSSStyleProperties) for available properties.
-   * @param options
-   */
-  toHaveCSS(values: CSSStyleProperties, options?: { timeout?: number }): Promise<void>;
   /**
    * Ensures that [Locator](https://playwright.dev/docs/api/class-locator) points to an element that is
    * [connected](https://developer.mozilla.org/en-US/docs/Web/API/Node/isConnected) to a Document or a ShadowRoot.
@@ -9010,6 +9296,33 @@ interface LocatorAssertions {
   }): Promise<void>;
 
   /**
+   * Ensures the [Locator](https://playwright.dev/docs/api/class-locator) resolves to an element with the given computed
+   * CSS style.
+   *
+   * **Usage**
+   *
+   * ```js
+   * const locator = page.getByRole('button');
+   * await expect(locator).toHaveCSS('display', 'flex');
+   * ```
+   *
+   * @param name CSS property name.
+   * @param value CSS property value.
+   * @param options
+   */
+  toHaveCSS(name: string, value: string|RegExp, options?: {
+    /**
+     * Pseudo-element to read computed styles from.
+     */
+    pseudo?: "before"|"after";
+
+    /**
+     * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
+     */
+    timeout?: number;
+  }): Promise<void>;
+
+  /**
    * Ensures the [Locator](https://playwright.dev/docs/api/class-locator) points to an element with the given DOM Node
    * ID.
    *
@@ -9453,207 +9766,6 @@ interface LocatorAssertions {
   not: LocatorAssertions;
 }
 
-type BaseMatchers<R, T> = GenericAssertions<R> & PlaywrightTest.Matchers<R, T> & SnapshotAssertions;
-type AllowedGenericMatchers<R, T> = PlaywrightTest.Matchers<R, T> & Pick<GenericAssertions<R>, 'toBe' | 'toBeDefined' | 'toBeFalsy' | 'toBeNull' | 'toBeTruthy' | 'toBeUndefined'>;
-
-type SpecificMatchers<R, T> =
-  T extends Page ? PageAssertions & AllowedGenericMatchers<R, T> :
-  T extends Locator ? LocatorAssertions & AllowedGenericMatchers<R, T> :
-  T extends APIResponse ? APIResponseAssertions & AllowedGenericMatchers<R, T> :
-  BaseMatchers<R, T> & (T extends Function ? FunctionAssertions : {});
-type AllMatchers<R, T> = PageAssertions & LocatorAssertions & APIResponseAssertions & FunctionAssertions & BaseMatchers<R, T>;
-
-type IfAny<T, Y, N> = 0 extends (1 & T) ? Y : N;
-type Awaited<T> = T extends PromiseLike<infer U> ? U : T;
-type ToUserMatcher<F, DefaultReturnType> = F extends (first: any, ...args: infer Rest) => infer R ? (...args: Rest) => (R extends PromiseLike<infer U> ? Promise<void> : DefaultReturnType) : never;
-type ToUserMatcherObject<T, DefaultReturnType, ArgType> = {
-  [K in keyof T as T[K] extends (arg: ArgType, ...rest: any[]) => any ? K : never]: ToUserMatcher<T[K], DefaultReturnType>;
-};
-
-type MatcherHintColor = (arg: string) => string;
-
-export type MatcherHintOptions = {
-  comment?: string;
-  expectedColor?: MatcherHintColor;
-  isDirectExpectCall?: boolean;
-  isNot?: boolean;
-  promise?: string;
-  receivedColor?: MatcherHintColor;
-  secondArgument?: string;
-  secondArgumentColor?: MatcherHintColor;
-};
-
-export interface ExpectMatcherUtils {
-  matcherHint(matcherName: string, received: unknown, expected: unknown, options?: MatcherHintOptions): string;
-  printDiffOrStringify(expected: unknown, received: unknown, expectedLabel: string, receivedLabel: string, expand: boolean): string;
-  printExpected(value: unknown): string;
-  printReceived(object: unknown): string;
-  printWithType<T>(name: string, value: T, print: (value: T) => string): string;
-  diff(a: unknown, b: unknown): string | null;
-  stringify(object: unknown, maxDepth?: number, maxWidth?: number): string;
-}
-
-export type ExpectMatcherState = {
-  /**
-   * Whether this matcher was called with the negated .not modifier.
-   */
-  isNot: boolean;
-  /**
-   * - 'rejects' if matcher was called with the promise .rejects modifier
-   * - 'resolves' if matcher was called with the promise .resolves modifier
-   * - '' if matcher was not called with a promise modifier
-   */
-  promise: 'rejects' | 'resolves' | '';
-  utils: ExpectMatcherUtils;
-  /**
-   * Timeout in milliseconds for the assertion to be fulfilled.
-   */
-  timeout: number;
-};
-
-export type MatcherReturnType = {
-  message: () => string;
-  pass: boolean;
-  name?: string;
-  expected?: unknown;
-  actual?: any;
-  log?: string[];
-  timeout?: number;
-};
-
-type MakeMatchers<R, T, ExtendedMatchers> = {
-  /**
-   * If you know how to test something, `.not` lets you test its opposite.
-   */
-  not: MakeMatchers<R, T, ExtendedMatchers>;
-  /**
-   * Use resolves to unwrap the value of a fulfilled promise so any other
-   * matcher can be chained. If the promise is rejected the assertion fails.
-   */
-  resolves: MakeMatchers<Promise<R>, Awaited<T>, ExtendedMatchers>;
-  /**
-   * Unwraps the reason of a rejected promise so any other matcher can be chained.
-   * If the promise is fulfilled the assertion fails.
-   */
-  rejects: MakeMatchers<Promise<R>, any, ExtendedMatchers>;
-} & IfAny<T, AllMatchers<R, T>, SpecificMatchers<R, T> & ToUserMatcherObject<ExtendedMatchers, R, T>>;
-
-type PollMatchers<R, T, ExtendedMatchers> = {
-  /**
-   * If you know how to test something, `.not` lets you test its opposite.
-   */
-  not: PollMatchers<R, T, ExtendedMatchers>;
-} & BaseMatchers<R, T> & ToUserMatcherObject<ExtendedMatchers, R, T>;
-
-export type Expect<ExtendedMatchers = {}> = {
-  <T = unknown>(actual: T, messageOrOptions?: string | { message?: string }): MakeMatchers<void, T, ExtendedMatchers>;
-  soft: <T = unknown>(actual: T, messageOrOptions?: string | { message?: string }) => MakeMatchers<void, T, ExtendedMatchers>;
-  poll: <T = unknown>(actual: () => T | Promise<T>, messageOrOptions?: string | { message?: string, timeout?: number, intervals?: number[] }) => PollMatchers<Promise<void>, T, ExtendedMatchers>;
-  extend<MoreMatchers extends Record<string, (this: ExpectMatcherState, receiver: any, ...args: any[]) => MatcherReturnType | Promise<MatcherReturnType>>>(matchers: MoreMatchers): Expect<ExtendedMatchers & MoreMatchers>;
-  configure: (configuration: {
-    message?: string,
-    timeout?: number,
-    soft?: boolean,
-  }) => Expect<ExtendedMatchers>;
-  getState(): unknown;
-  not: Omit<AsymmetricMatchers, 'any' | 'anything'>;
-} & AsymmetricMatchers;
-
-// --- BEGINGLOBAL ---
-declare global {
-  export namespace PlaywrightTest {
-    export interface Matchers<R, T = unknown> {
-    }
-  }
-}
-// --- ENDGLOBAL ---
-
-/**
- * These tests are executed in Playwright environment that launches the browser
- * and provides a fresh page to each test.
- */
-export const test: TestType<PlaywrightTestArgs & PlaywrightTestOptions, PlaywrightWorkerArgs & PlaywrightWorkerOptions>;
-export default test;
-
-export const _baseTest: TestType<{}, {}>;
-export const expect: Expect<{}>;
-
-/**
- * Defines Playwright config
- */
-export function defineConfig(config: PlaywrightTestConfig): PlaywrightTestConfig;
-export function defineConfig<T>(config: PlaywrightTestConfig<T>): PlaywrightTestConfig<T>;
-export function defineConfig<T, W>(config: PlaywrightTestConfig<T, W>): PlaywrightTestConfig<T, W>;
-export function defineConfig(config: PlaywrightTestConfig, ...configs: PlaywrightTestConfig[]): PlaywrightTestConfig;
-export function defineConfig<T>(config: PlaywrightTestConfig<T>, ...configs: PlaywrightTestConfig<T>[]): PlaywrightTestConfig<T>;
-export function defineConfig<T, W>(config: PlaywrightTestConfig<T, W>, ...configs: PlaywrightTestConfig<T, W>[]): PlaywrightTestConfig<T, W>;
-
-type MergedT<List> = List extends [TestType<infer T, any>, ...(infer Rest)] ? T & MergedT<Rest> : {};
-type MergedW<List> = List extends [TestType<any, infer W>, ...(infer Rest)] ? W & MergedW<Rest> : {};
-type MergedTestType<List> = TestType<MergedT<List>, MergedW<List>>;
-
-/**
- * Merges fixtures
- */
-export function mergeTests<List extends any[]>(...tests: List): MergedTestType<List>;
-
-type MergedExpectMatchers<List> = List extends [Expect<infer M>, ...(infer Rest)] ? M & MergedExpectMatchers<Rest> : {};
-type MergedExpect<List> = Expect<MergedExpectMatchers<List>>;
-
-/**
- * Merges expects
- */
-export function mergeExpects<List extends any[]>(...expects: List): MergedExpect<List>;
-
-// This is required to not export everything by default. See https://github.com/Microsoft/TypeScript/issues/19545#issuecomment-340490459
-export { };
-
-
-
-/**
- * The [APIResponseAssertions](https://playwright.dev/docs/api/class-apiresponseassertions) class provides assertion
- * methods that can be used to make assertions about the
- * [APIResponse](https://playwright.dev/docs/api/class-apiresponse) in the tests.
- *
- * ```js
- * import { test, expect } from '@playwright/test';
- *
- * test('navigates to login', async ({ page }) => {
- *   // ...
- *   const response = await page.request.get('https://playwright.dev');
- *   await expect(response).toBeOK();
- * });
- * ```
- *
- */
-interface APIResponseAssertions {
-  /**
-   * Ensures the response status code is within `200..299` range.
-   *
-   * **Usage**
-   *
-   * ```js
-   * await expect(response).toBeOK();
-   * ```
-   *
-   */
-  toBeOK(): Promise<void>;
-
-  /**
-   * Makes the assertion check for the opposite condition.
-   *
-   * **Usage**
-   *
-   * For example, this code tests that the response status is not successful:
-   *
-   * ```js
-   * await expect(response).not.toBeOK();
-   * ```
-   *
-   */
-  not: APIResponseAssertions;
-}
-
 /**
  * The [PageAssertions](https://playwright.dev/docs/api/class-pageassertions) class provides assertion methods that
  * can be used to make assertions about the [Page](https://playwright.dev/docs/api/class-page) state in the tests.
@@ -9758,6 +9870,57 @@ interface PageAssertions {
      * ignores this flag.
      */
     ignoreCase?: boolean;
+
+    /**
+     * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
+     */
+    timeout?: number;
+  }): Promise<void>;
+
+  /**
+   * Asserts that the page body matches the given [accessibility snapshot](https://playwright.dev/docs/aria-snapshots).
+   *
+   * **Usage**
+   *
+   * ```js
+   * await page.goto('https://demo.playwright.dev/todomvc/');
+   * await expect(page).toMatchAriaSnapshot(`
+   *   - heading "todos"
+   *   - textbox "What needs to be done?"
+   * `);
+   * ```
+   *
+   * @param expected
+   * @param options
+   */
+  toMatchAriaSnapshot(expected: string, options?: {
+    /**
+     * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
+     */
+    timeout?: number;
+  }): Promise<void>;
+
+  /**
+   * Asserts that the page body matches the given [accessibility snapshot](https://playwright.dev/docs/aria-snapshots).
+   *
+   * Snapshot is stored in a separate `.aria.yml` file in a location configured by
+   * `expect.toMatchAriaSnapshot.pathTemplate` and/or `snapshotPathTemplate` properties in the configuration file.
+   *
+   * **Usage**
+   *
+   * ```js
+   * await expect(page).toMatchAriaSnapshot();
+   * await expect(page).toMatchAriaSnapshot({ name: 'home.aria.yml' });
+   * ```
+   *
+   * @param options
+   */
+  toMatchAriaSnapshot(options?: {
+    /**
+     * Name of the snapshot to store in the snapshot folder corresponding to this test. Generates sequential names if not
+     * specified.
+     */
+    name?: string;
 
     /**
      * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
@@ -9931,6 +10094,12 @@ export interface TestInfoError {
    * error. Will be `undefined` if there is no cause or if the cause is not an instance of [Error].
    */
   cause?: TestInfoError;
+
+  /**
+   * Additional context for the error, such as the aria snapshot of the receiver at the time of an `expect(...)` matcher
+   * failure.
+   */
+  errorContext?: string;
 
   /**
    * Error message. Set when [Error] (or its subclass) has been thrown.

@@ -17,23 +17,23 @@
 import { chromium } from 'playwright';
 
 import { test, expect } from './fixtures';
-import { isProfileLocked } from '../../packages/playwright/lib/mcp/browser/browserContextFactory';
+import { tools } from '../../packages/playwright-core/lib/coreBundle';
 
 test('isProfileLocked returns false for empty directory', async ({ mcpBrowser }, testInfo) => {
   test.skip(!['chromium', 'chrome', 'msedge'].includes(mcpBrowser!), 'Chromium-only');
   const dir = testInfo.outputPath('profile');
-  expect(isProfileLocked(dir)).toBe(false);
+  expect(tools.isProfileLocked(dir)).toBe(false);
 });
 
 test('isProfileLocked detects a real browser holding the profile', async ({ mcpBrowser }, testInfo) => {
   test.skip(!['chromium', 'chrome', 'msedge'].includes(mcpBrowser!), 'Chromium-only');
   const userDataDir = testInfo.outputPath('user-data-dir');
   const context = await chromium.launchPersistentContext(userDataDir, {
-    channel: mcpBrowser === 'chromium' ? undefined : mcpBrowser,
+    channel: mcpBrowser === 'chromium' ? 'chrome-for-testing' : mcpBrowser,
     headless: true,
   });
   try {
-    expect(isProfileLocked(userDataDir)).toBe(true);
+    expect(tools.isProfileLocked(userDataDir)).toBe(true);
   } finally {
     await context.close();
   }
@@ -43,11 +43,11 @@ test('isProfileLocked returns false after browser closes', async ({ mcpBrowser }
   test.skip(!['chromium', 'chrome', 'msedge'].includes(mcpBrowser!), 'Chromium-only');
   const userDataDir = testInfo.outputPath('user-data-dir');
   const context = await chromium.launchPersistentContext(userDataDir, {
-    channel: mcpBrowser === 'chromium' ? undefined : mcpBrowser,
+    channel: mcpBrowser === 'chromium' ? 'chrome-for-testing' : mcpBrowser,
     headless: true,
   });
   await context.close();
-  expect(isProfileLocked(userDataDir)).toBe(false);
+  expect(tools.isProfileLocked(userDataDir)).toBe(false);
 });
 
 test('locked profile produces actionable error on navigate', async ({ mcpBrowser, startClient, server }, testInfo) => {

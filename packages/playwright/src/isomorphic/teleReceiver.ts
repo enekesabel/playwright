@@ -29,6 +29,7 @@ export type JsonConfig = Pick<reporterTypes.FullConfig, 'configFile' | 'globalTi
   // optional for backwards compatibility
   tags?: reporterTypes.FullConfig['tags'],
   webServer?: reporterTypes.FullConfig['webServer'],
+  failOnFlakyTests?: reporterTypes.FullConfig['failOnFlakyTests'],
 };
 
 export type JsonPattern = {
@@ -212,6 +213,7 @@ export type JsonOnErrorEvent = {
   method: 'onError';
   params: {
     error: reporterTypes.TestError;
+    workerInfo?: { workerIndex: number, parallelIndex: number, projectName: string };
   };
 };
 
@@ -313,7 +315,7 @@ export class TeleReporterReceiver {
       return;
     }
     if (method === 'onError') {
-      this._onError(params.error);
+      this._onError(params.error, params.workerInfo);
       return;
     }
     if (method === 'onStdIO') {
@@ -438,8 +440,20 @@ export class TeleReporterReceiver {
     })));
   }
 
-  private _onError(error: reporterTypes.TestError) {
-    this._reporter.onError?.(error);
+  private _onError(error: reporterTypes.TestError, workerInfo?: { workerIndex: number, parallelIndex: number, projectName: string }) {
+    let fullWorkerInfo: reporterTypes.WorkerInfo | undefined;
+    if (workerInfo) {
+      const project = this._config.projects.find(p => p.name === workerInfo.projectName);
+      if (project) {
+        fullWorkerInfo = {
+          workerIndex: workerInfo.workerIndex,
+          parallelIndex: workerInfo.parallelIndex,
+          config: this._config,
+          project,
+        };
+      }
+    }
+    this._reporter.onError?.(error, fullWorkerInfo);
   }
 
   private _onStdIO(type: JsonStdIOType, testId: string | undefined, resultId: string | undefined, data: string, isBase64: boolean) {
@@ -766,6 +780,8 @@ export class TeleTestResult implements reporterTypes.TestResult {
 export type TeleFullProject = reporterTypes.FullProject;
 
 export const baseFullConfig: reporterTypes.FullConfig = {
+  argv: [],
+  failOnFlakyTests: false,
   forbidOnly: false,
   fullyParallel: false,
   globalSetup: null,
@@ -786,7 +802,6 @@ export const baseFullConfig: reporterTypes.FullConfig = {
   tags: [],
   updateSnapshots: 'missing',
   updateSourceMethod: 'patch',
-  runAgents: 'none',
   version: '',
   workers: 0,
   webServer: null,

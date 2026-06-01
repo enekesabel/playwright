@@ -16,6 +16,7 @@
 
 import { parseAriaSnapshot } from '@isomorphic/ariaSnapshot';
 import { asLocator } from '@isomorphic/locatorGenerators';
+import { splitTestIdAttributeNames } from '@isomorphic/locatorUtils';
 import { parseAttributeSelector, parseSelector, stringifySelector, visitAllSelectorParts } from '@isomorphic/selectorParser';
 import { cacheNormalizedWhitespaces, normalizeWhiteSpace, trimStringWithEllipsis } from '@isomorphic/stringUtils';
 
@@ -35,7 +36,7 @@ import { UtilityScript } from './utilityScript';
 import type { AriaTemplateNode } from '@isomorphic/ariaSnapshot';
 import type { CSSComplexSelectorList } from '@isomorphic/cssParser';
 import type { Language } from '@isomorphic/locatorGenerators';
-import type { NestedSelectorBody, ParsedSelector, ParsedSelectorPart } from '@isomorphic/selectorParser';
+import type { AttributeSelectorPart, NestedSelectorBody, ParsedSelector, ParsedSelectorPart } from '@isomorphic/selectorParser';
 import type * as channels from '@protocol/channels';
 import type { AriaSnapshot, AriaTreeOptions } from './ariaSnapshot';
 import type { LayoutSelectorName } from './layoutSelectorUtils';
@@ -47,13 +48,13 @@ import type { Builtins } from './utilityScript';
 
 export type FrameExpectParams = Omit<channels.FrameExpectParams, 'expectedValue' | 'timeout'> & {
   expectedValue?: any;
-  timeoutForLogs?: number;
   noAutoWaiting?: boolean;
 };
 
 export type ElementState = 'visible' | 'hidden' | 'enabled' | 'disabled' | 'editable' | 'checked' | 'unchecked' | 'indeterminate' | 'stable';
 export type ElementStateWithoutStable = Exclude<ElementState, 'stable'>;
 export type ElementStateQueryResult = { matches: boolean, received?: string | 'error:notconnected', isRadio?: boolean };
+export type ExpectReceived = { value?: any, ariaSnapshot?: string };
 
 export type HitTargetInterceptionResult = {
   stop: () => 'done' | { hitTargetDescription: string };
@@ -74,6 +75,7 @@ export type InjectedScriptOptions = {
   testIdAttributeName: string;
   stableRafCount: number;
   browserName: string;
+  shouldPrependErrorPrefix?: boolean;
   isUtilityWorld?: boolean;
   customEngines: { name: string, source: string }[];
 };
@@ -83,6 +85,7 @@ export class InjectedScript {
   readonly _evaluator: SelectorEvaluatorImpl;
   private _stableRafCount: number;
   private _browserName: string;
+  private _shouldPrependErrorPrefix: boolean;
   private _isUtilityWorld: boolean;
   readonly onGlobalListenersRemoved: Set<() => void>;
   private _hitTargetInterceptor: undefined | ((event: MouseEvent | PointerEvent | TouchEvent) => void);
@@ -90,7 +93,6 @@ export class InjectedScript {
   readonly isUnderTest: boolean;
   private _sdkLanguage: Language;
   private _testIdAttributeNameForStrictErrorAndConsoleCodegen: string = 'data-testid';
-  private _markedElements?: { callId: string, elements: Set<Element> };
   readonly window: Window & typeof globalThis;
   readonly document: Document;
   readonly consoleApi: ConsoleAPI;
@@ -227,7 +229,7 @@ export class InjectedScript {
     this._engines.set('internal:has-text', this._createInternalHasTextEngine());
     this._engines.set('internal:has-not-text', this._createInternalHasNotTextEngine());
     this._engines.set('internal:attr', this._createNamedAttributeEngine());
-    this._engines.set('internal:testid', this._createNamedAttributeEngine());
+    this._engines.set('internal:testid', this._createTestIdEngine());
     this._engines.set('internal:role', createRoleEngine(true));
     this._engines.set('internal:describe', this._createDescribeEngine());
     this._engines.set('aria-ref', this._createAriaRefEngine());
@@ -237,6 +239,7 @@ export class InjectedScript {
 
     this._stableRafCount = options.stableRafCount;
     this._browserName = options.browserName;
+    this._shouldPrependErrorPrefix = !!options.shouldPrependErrorPrefix;
     this._isUtilityWorld = !!options.isUtilityWorld;
     setGlobalOptions({ browserNameForWorkarounds: options.browserName });
 
@@ -306,25 +309,25 @@ export class InjectedScript {
     return this.incrementalAriaSnapshot(node, options).full;
   }
 
-  incrementalAriaSnapshot(node: Node, options: AriaTreeOptions & { track?: string }): { full: string, incremental?: string, iframeRefs: string[] } {
+  incrementalAriaSnapshot(node: Node, options: AriaTreeOptions & { track?: string, depth?: number }): { full: string, incremental?: string, iframeRefs: string[], iframeDepths: Record<string, number> } {
     if (node.nodeType !== Node.ELEMENT_NODE)
       throw this.createStacklessError('Can only capture aria snapshot of Element nodes.');
     const ariaSnapshot = generateAriaTree(node as Element, options);
-    const full = renderAriaTree(ariaSnapshot, options);
+    const rendered = renderAriaTree(ariaSnapshot, options);
     let incremental: string | undefined;
     if (options.track) {
       const previousSnapshot = this._lastAriaSnapshotForTrack.get(options.track);
       if (previousSnapshot)
-        incremental = renderAriaTree(ariaSnapshot, options, previousSnapshot);
+        incremental = renderAriaTree(ariaSnapshot, options, previousSnapshot).text;
       this._lastAriaSnapshotForTrack.set(options.track, ariaSnapshot);
     }
     this._lastAriaSnapshotForQuery = ariaSnapshot;
-    return { full, incremental, iframeRefs: ariaSnapshot.iframeRefs };
+    return { full: rendered.text, incremental, iframeRefs: ariaSnapshot.iframeRefs, iframeDepths: rendered.iframeDepths };
   }
 
   ariaSnapshotForRecorder(): { ariaSnapshot: string, refs: Map<Element, string> } {
     const tree = generateAriaTree(this.document.body, { mode: 'ai' });
-    const ariaSnapshot = renderAriaTree(tree, { mode: 'ai' });
+    const { text: ariaSnapshot } = renderAriaTree(tree, { mode: 'ai' });
     return { ariaSnapshot, refs: tree.refs };
   }
 
@@ -488,17 +491,27 @@ export class InjectedScript {
       const parsed = parseAttributeSelector(selector, true);
       if (parsed.name || parsed.attributes.length !== 1)
         throw new Error('Malformed attribute selector: ' + selector);
-      const { name, value, caseSensitive } = parsed.attributes[0];
-      const lowerCaseValue = caseSensitive ? null : value.toLowerCase();
-      let matcher: (s: string) => boolean;
-      if (value instanceof RegExp)
-        matcher = s => !!s.match(value);
-      else if (caseSensitive)
-        matcher = s => s === value;
-      else
-        matcher = s => s.toLowerCase().includes(lowerCaseValue!);
+      const { name } = parsed.attributes[0];
+      const matcher = createAttributeMatcher(parsed.attributes[0]);
       const elements = this._evaluator._queryCSS({ scope: root as Document | Element, pierceShadow: true }, `[${name}]`);
       return elements.filter(e => matcher(e.getAttribute(name)!));
+    };
+    return { queryAll };
+  }
+
+  private _createTestIdEngine(): SelectorEngine {
+    const queryAll = (root: SelectorRoot, selector: string): Element[] => {
+      const parsed = parseAttributeSelector(selector, true);
+      if (parsed.name || parsed.attributes.length !== 1)
+        throw new Error('Malformed test id selector: ' + selector);
+      const names = splitTestIdAttributeNames(parsed.attributes[0].name);
+      const matcher = createAttributeMatcher(parsed.attributes[0]);
+      const cssQuery = names.map(n => `[${n}]`).join(',');
+      const elements = this._evaluator._queryCSS({ scope: root as Document | Element, pierceShadow: true }, cssQuery);
+      return elements.filter(e => names.some(n => {
+        const actual = e.getAttribute(n);
+        return actual !== null && matcher(actual);
+      }));
     };
     return { queryAll };
   }
@@ -786,16 +799,18 @@ export class InjectedScript {
     let remainingOptionsToSelect = optionsToSelect.slice();
     for (let index = 0; index < options.length; index++) {
       const option = options[index];
+      const normalizedOptionLabel = normalizeWhiteSpace(option.label);
       const filter = (optionToSelect: Node | { valueOrLabel?: string, value?: string, label?: string, index?: number }) => {
         if (optionToSelect instanceof Node)
           return option === optionToSelect;
+        const matchesLabel = (label: string) => label === option.label || normalizeWhiteSpace(label) === normalizedOptionLabel;
         let matches = true;
         if (optionToSelect.valueOrLabel !== undefined)
-          matches = matches && (optionToSelect.valueOrLabel === option.value || optionToSelect.valueOrLabel === option.label);
+          matches = matches && (optionToSelect.valueOrLabel === option.value || matchesLabel(optionToSelect.valueOrLabel));
         if (optionToSelect.value !== undefined)
           matches = matches && optionToSelect.value === option.value;
         if (optionToSelect.label !== undefined)
-          matches = matches && optionToSelect.label === option.label;
+          matches = matches && matchesLabel(optionToSelect.label);
         if (optionToSelect.index !== undefined)
           matches = matches && optionToSelect.index === index;
         return matches;
@@ -875,6 +890,7 @@ export class InjectedScript {
       textarea.focus();
       return 'done';
     }
+    (element as HTMLElement | SVGElement).focus();
     const range = element.ownerDocument.createRange();
     range.selectNodeContents(element);
     const selection = element.ownerDocument.defaultView!.getSelection();
@@ -882,7 +898,6 @@ export class InjectedScript {
       selection.removeAllRanges();
       selection.addRange(range);
     }
-    (element as HTMLElement | SVGElement).focus();
     return 'done';
   }
 
@@ -1097,8 +1112,9 @@ export class InjectedScript {
         return;
 
       // Playwright only issues trusted events, so allow any custom events originating from
-      // the page or content scripts.
-      if (!event.isTrusted)
+      // the page or content scripts. The WebView backend cannot produce trusted events, so
+      // it marks synthetic events with __pwTrustedSynthetic to opt back into interception.
+      if (!event.isTrusted && !(event as any).__pwTrustedSynthetic)
         return;
 
       // Determine the event point. Note that Firefox does not always have window.TouchEvent.
@@ -1273,13 +1289,12 @@ export class InjectedScript {
   }
 
   createStacklessError(message: string): Error {
+    const error = this._shouldPrependErrorPrefix ? new Error('Error: ' + message) : new Error(message);
     if (this._browserName === 'firefox') {
-      const error = new Error('Error: ' + message);
       // Firefox cannot delete the stack, so assign to an empty string.
       error.stack = '';
       return error;
     }
-    const error = new Error(message);
     // Chromium/WebKit should delete the stack instead.
     delete error.stack;
     return error;
@@ -1290,22 +1305,85 @@ export class InjectedScript {
   }
 
   maskSelectors(selectors: ParsedSelector[], color: string) {
+    const highlight = this._createHighlight();
+    const elements = [];
+    for (const selector of selectors)
+      elements.push(this.querySelectorAll(selector, this.document.documentElement));
+    highlight.maskElements(elements.flat(), color);
+  }
+
+  private _createHighlight() {
     if (this._highlight)
       this.hideHighlight();
     this._highlight = new Highlight(this);
     this._highlight.install();
-    const elements = [];
-    for (const selector of selectors)
-      elements.push(this.querySelectorAll(selector, this.document.documentElement));
-    this._highlight.maskElements(elements.flat(), color);
+    return this._highlight;
   }
 
-  highlight(selector: ParsedSelector) {
+  private _ensureHighlight() {
     if (!this._highlight) {
       this._highlight = new Highlight(this);
       this._highlight.install();
     }
-    this._highlight.runHighlightOnRaf(selector);
+    return this._highlight;
+  }
+
+  addHighlight(selector: ParsedSelector, style?: string) {
+    const highlight = this._ensureHighlight();
+    highlight.addElementHighlight(selector, style);
+  }
+
+  removeHighlight(selector: ParsedSelector) {
+    const highlight = this._ensureHighlight();
+    highlight.removeElementHighlight(selector);
+  }
+
+  setScreencastAnnotation(annotation: { point?: channels.Point, box?: channels.Rect, actionTitle?: string, duration?: number, position?: string, fontSize?: number, cursor?: 'none' | 'pointer' } | null) {
+    const highlight = this._ensureHighlight();
+    if (!annotation) {
+      highlight.updateHighlight([]);
+      highlight.hideActionPoint();
+      highlight.hideActionTitle();
+      highlight.hideActionCursor();
+      return;
+    }
+    const fadeDuration = annotation.duration ?? 500;
+
+    if (annotation.box) {
+      highlight.updateHighlight([{
+        box: annotation.box,
+        color: 'rgba(0, 128, 255, 0.15)',
+        borderColor: 'rgba(0, 128, 255, 0.6)',
+        fadeDuration,
+      }]);
+    }
+    if (annotation.point) {
+      if (annotation.cursor !== 'none')
+        highlight.moveActionCursor(annotation.point.x, annotation.point.y, fadeDuration);
+      highlight.showActionPoint(annotation.point.x, annotation.point.y, fadeDuration);
+    }
+    if (annotation.actionTitle)
+      highlight.showActionTitle(annotation.actionTitle, fadeDuration, annotation.position, annotation.fontSize);
+  }
+
+  addUserOverlay(id: string, html: string) {
+    const highlight = this._ensureHighlight();
+    highlight.addUserOverlay(id, html);
+  }
+
+  getUserOverlay(id: string): HTMLElement | undefined {
+    const highlight = this._ensureHighlight();
+    return highlight.getUserOverlay(id);
+  }
+
+  removeUserOverlay(id: string) {
+    const highlight = this._ensureHighlight();
+    highlight.removeUserOverlay(id);
+  }
+
+  setUserOverlaysVisible(visible: boolean) {
+    const highlight = this._ensureHighlight();
+    highlight.setUserOverlaysVisible(visible);
   }
 
   hideHighlight() {
@@ -1315,34 +1393,21 @@ export class InjectedScript {
     }
   }
 
-  markTargetElements(markedElements: Set<Element>, callId: string) {
-    if (this._markedElements?.callId !== callId)
-      this._markedElements = undefined;
-    const previous = this._markedElements?.elements || new Set();
-
-    const unmarkEvent = new CustomEvent('__playwright_unmark_target__', {
+  markTargetElements(markedElements: Set<Element>) {
+    const resetEvent = new CustomEvent('__playwright_reset_targets__', {
       bubbles: true,
       cancelable: true,
-      detail: callId,
       composed: true,
     });
-    for (const element of previous) {
-      if (!markedElements.has(element))
-        element.dispatchEvent(unmarkEvent);
-    }
+    this.document.dispatchEvent(resetEvent);
 
     const markEvent = new CustomEvent('__playwright_mark_target__', {
       bubbles: true,
       cancelable: true,
-      detail: callId,
       composed: true,
     });
-    for (const element of markedElements) {
-      if (!previous.has(element))
-        element.dispatchEvent(markEvent);
-    }
-
-    this._markedElements = { callId, elements: markedElements };
+    for (const element of markedElements)
+      element.dispatchEvent(markEvent);
   }
 
   private _setupGlobalListenersRemovalDetection() {
@@ -1380,7 +1445,39 @@ export class InjectedScript {
     this.onGlobalListenersRemoved.add(addHitTargetInterceptorListeners);
   }
 
-  async expect(element: Element | undefined, options: FrameExpectParams, elements: Element[]): Promise<{ matches: boolean, received?: any, missingReceived?: boolean }> {
+  async expect(element: Element | undefined, options: FrameExpectParams, elements: Element[]): Promise<{ matches: boolean, received?: ExpectReceived, missingReceived?: boolean }> {
+    const core = await this._expectCore(element, options, elements);
+    const ariaSnapshot = this._ariaSnapshotForExpect(element, options);
+    if (core.received === undefined && ariaSnapshot === undefined)
+      return { matches: core.matches, missingReceived: core.missingReceived };
+    return { matches: core.matches, received: { value: core.received, ariaSnapshot }, missingReceived: core.missingReceived };
+  }
+
+  private _ariaSnapshotForExpect(element: Element | undefined, options: FrameExpectParams): string | undefined {
+    const expression = options.expression;
+    if (expression === 'to.have.count' || expression.endsWith('.array'))
+      return undefined;
+    if (expression === 'to.match.aria')
+      return undefined;
+    if (element && isElementVisible(element)) {
+      // Element-scoped snapshot. Containment matchers want the full subtree;
+      // property matchers only need the element's own line.
+      const isContainment = expression === 'to.have.text';
+      return this._renderAriaSnapshot(element, { mode: 'default', depth: isContainment ? undefined : 1 });
+    }
+    // Element missing or hidden — fall back to a full-page snapshot for context.
+    if (!this.document.body)
+      return undefined;
+    return this._renderAriaSnapshot(this.document.body, { mode: 'default' });
+  }
+
+  private _renderAriaSnapshot(element: Element, options: AriaTreeOptions): string {
+    // Bypass _lastAriaSnapshotForQuery — that cache is reserved for explicit
+    // ariaSnapshot() calls used by the aria-ref selector engine.
+    return renderAriaTree(generateAriaTree(element, options), options).text;
+  }
+
+  private async _expectCore(element: Element | undefined, options: FrameExpectParams, elements: Element[]): Promise<{ matches: boolean, received?: any, missingReceived?: boolean }> {
     const isArray = options.expression === 'to.have.count' || options.expression.endsWith('.array');
     if (isArray)
       return this.expectArray(elements, options);
@@ -1410,6 +1507,15 @@ export class InjectedScript {
         const received = this.document.location.href;
         return { received, matches: matcher.matches(received) };
       }
+      if (options.expression === 'to.match.aria' && !options.selector) {
+        if (!this.document.body)
+          return { matches: options.isNot, missingReceived: true };
+        const result = matchesExpectAriaTemplate(this.document.body, options.expectedValue);
+        return {
+          received: result.received,
+          matches: !!result.matches.length,
+        };
+      }
       // When none of the above applies, expect does not match.
       return { matches: options.isNot, missingReceived: true };
     }
@@ -1423,7 +1529,7 @@ export class InjectedScript {
       // Element state / boolean values.
       let result: ElementStateQueryResult | undefined;
       if (expression === 'to.have.attribute') {
-        const hasAttribute = element.hasAttribute(options.expressionArg || '');
+        const hasAttribute = element.hasAttribute(options.expressionArg);
         result = {
           matches: hasAttribute,
           received: hasAttribute ? 'attribute present' : 'attribute not present',
@@ -1487,7 +1593,7 @@ export class InjectedScript {
       // JS property
       if (expression === 'to.have.property') {
         let target = element;
-        const properties = (options.expressionArg || '').split('.');
+        const properties = options.expressionArg.split('.');
         for (let i = 0; i < properties.length - 1; i++) {
           if (typeof target !== 'object' || !(properties[i] in target))
             return { received: undefined, matches: false };
@@ -1498,26 +1604,6 @@ export class InjectedScript {
         return { received, matches };
       }
     }
-
-    {
-      // Computed style object
-      if (expression === 'to.have.css.object') {
-        const expected = (options.expectedValue ?? {}) as Record<string, string>;
-        const received: Record<string, string> = {};
-        let matches = true;
-        const style = this.window.getComputedStyle(element);
-        for (const [prop, value] of Object.entries(expected)) {
-          let computed = style[prop as any];
-          if (typeof computed !== 'string')
-            computed = '';
-          if (computed !== value)
-            matches = false;
-          received[prop] = computed;
-        }
-        return { received, matches };
-      }
-    }
-
     {
       // Viewport intersection
       if (expression === 'to.be.in.viewport') {
@@ -1554,7 +1640,7 @@ export class InjectedScript {
       // Single text value.
       let received: string | undefined;
       if (expression === 'to.have.attribute.value') {
-        const value = element.getAttribute(options.expressionArg || '');
+        const value = element.getAttribute(options.expressionArg);
         if (value === null)
           return { received: null, matches: false };
         received = value;
@@ -1566,7 +1652,7 @@ export class InjectedScript {
           matches: new ExpectedTextMatcher(options.expectedText[0]).matchesClassList(this, element.classList, /* partial */ expression === 'to.contain.class'),
         };
       } else if (expression === 'to.have.css') {
-        received = this.window.getComputedStyle(element).getPropertyValue(options.expressionArg || '');
+        received = this.window.getComputedStyle(element, options.pseudo ? `::${options.pseudo}` : undefined).getPropertyValue(options.expressionArg);
       } else if (expression === 'to.have.id') {
         received = element.id;
       } else if (expression === 'to.have.text') {
@@ -1655,6 +1741,16 @@ export class InjectedScript {
 
 function oneLine(s: string): string {
   return s.replace(/\n/g, '↵').replace(/\t/g, '⇆');
+}
+
+function createAttributeMatcher(part: AttributeSelectorPart): (s: string) => boolean {
+  const { value, caseSensitive } = part;
+  if (value instanceof RegExp)
+    return s => !!s.match(value);
+  if (caseSensitive)
+    return s => s === value;
+  const lowerCaseValue = value.toLowerCase();
+  return s => s.toLowerCase().includes(lowerCaseValue);
 }
 
 function cssUnquote(s: string): string {

@@ -15,14 +15,20 @@
  * limitations under the License.
  */
 
-import { Artifact } from './artifact';
+import { headersObjectToArray } from '@isomorphic/headers';
+import { urlMatchesEqual } from '@isomorphic/urlMatch';
+import { isRegExp, isString } from '@isomorphic/rtti';
+import { rewriteErrorMessage } from '@isomorphic/stackTrace';
 import { Browser } from './browser';
 import { CDPSession } from './cdpSession';
 import { ChannelOwner } from './channelOwner';
 import { evaluationScript } from './clientHelper';
 import { Clock } from './clock';
 import { ConsoleMessage } from './consoleMessage';
+import { Credentials } from './credentials';
+import { Debugger } from './debugger';
 import { Dialog } from './dialog';
+import { DisposableObject, DisposableStub } from './disposable';
 import { TargetClosedError, parseError } from './errors';
 import { Events } from './events';
 import { APIRequestContext } from './fetch';
@@ -36,16 +42,12 @@ import { WebError } from './webError';
 import { Worker } from './worker';
 import { TimeoutSettings } from './timeoutSettings';
 import { mkdirIfNeeded } from './fileUtils';
-import { headersObjectToArray } from '../utils/isomorphic/headers';
-import { urlMatchesEqual } from '../utils/isomorphic/urlMatch';
-import { isRegExp, isString } from '../utils/isomorphic/rtti';
-import { rewriteErrorMessage } from '../utils/isomorphic/stackTrace';
 
 import type { BrowserContextOptions, Headers, SetStorageState, StorageState, WaitForEventOptions } from './types';
 import type * as structs from '../../types/structs';
 import type * as api from '../../types/types';
-import type { URLMatch } from '../utils/isomorphic/urlMatch';
-import type { Platform } from './platform';
+import type { URLMatch } from '@isomorphic/urlMatch';
+import type { Platform } from '@isomorphic/platform';
 import type * as channels from '@protocol/channels';
 import type * as actions from '@recorder/actions';
 
@@ -68,18 +70,18 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
   private _closedPromise: Promise<void>;
   readonly _options: channels.BrowserNewContextParams;
 
+  readonly debugger: Debugger;
   readonly request: APIRequestContext;
   readonly tracing: Tracing;
   readonly clock: Clock;
+  readonly credentials: Credentials;
 
   readonly _serviceWorkers = new Set<Worker>();
-  private _harRecorders = new Map<string, { path: string, content: 'embed' | 'attach' | 'omit' | undefined }>();
-  _closingStatus: 'none' | 'closing' | 'closed' = 'none';
+  private _closingStatus: 'none' | 'closing' | 'closed' = 'none';
   private _closeReason: string | undefined;
   private _harRouters: HarRouter[] = [];
   private _onRecorderEventSink: RecorderEventSink | undefined;
-  private _allowedProtocols: string[] | undefined;
-  private _allowedDirectories: string[] | undefined;
+
 
   static from(context: channels.BrowserContextChannel): BrowserContext {
     return (context as any)._object;
@@ -93,11 +95,12 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
     super(parent, type, guid, initializer);
     this._options = initializer.options;
     this._timeoutSettings = new TimeoutSettings(this._platform);
+    this.debugger = Debugger.from(initializer.debugger);
     this.tracing = Tracing.from(initializer.tracing);
     this.request = APIRequestContext.from(initializer.requestContext);
     this.request._timeoutSettings = this._timeoutSettings;
-    this.request._checkUrlAllowed = (url: string) => this._checkUrlAllowed(url);
     this.clock = new Clock(this);
+    this.credentials = new Credentials(this);
 
     this._channel.on('bindingCall', ({ binding }) => this._onBinding(BindingCall.from(binding)));
     this._channel.on('close', () => this._onClose());
@@ -125,10 +128,10 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
       }
       this.emit(Events.BrowserContext.Console, consoleMessage);
     });
-    this._channel.on('pageError', ({ error, page }) => {
+    this._channel.on('pageError', ({ error, page, location }) => {
       const pageObject = Page.from(page);
       const parsedError = parseError(error);
-      this.emit(Events.BrowserContext.WebError, new WebError(pageObject, parsedError));
+      this.emit(Events.BrowserContext.WebError, new WebError(pageObject, parsedError, location));
       if (pageObject)
         pageObject.emit(Events.Page.PageError, parsedError);
     });
@@ -177,7 +180,7 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
     if (!recordHar)
       return;
     const defaultContent = recordHar.path.endsWith('.zip') ? 'attach' : 'embed';
-    await this._recordIntoHAR(recordHar.path, null, {
+    await this.tracing._recordIntoHAR(recordHar.path, null, {
       url: recordHar.urlFilter,
       updateContent: recordHar.content ?? (recordHar.omitContent ? 'omit' : defaultContent),
       updateMode: recordHar.mode ?? 'full',
@@ -230,7 +233,7 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
     const routeHandlers = this._routes.slice();
     for (const routeHandler of routeHandlers) {
       // If the page or the context was closed we stall all requests right away.
-      if (page?._closeWasCalled || this._closingStatus !== 'none')
+      if (page?._closeWasCalled || this.isClosed())
         return;
       if (!routeHandler.matches(route.request().url()))
         continue;
@@ -292,6 +295,10 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
     return [...this._pages];
   }
 
+  isClosed(): boolean {
+    return this._closingStatus !== 'none';
+  }
+
   async newPage(): Promise<Page> {
     if (this._ownerPage)
       throw new Error('Please use browser.newContext()');
@@ -349,25 +356,28 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
     await this._channel.setHTTPCredentials({ httpCredentials: httpCredentials || undefined });
   }
 
-  async addInitScript(script: Function | string | { path?: string, content?: string }, arg?: any): Promise<void> {
+  async addInitScript(script: Function | string | { path?: string, content?: string }, arg?: any) {
     const source = await evaluationScript(this._platform, script, arg);
-    await this._channel.addInitScript({ source });
+    return DisposableObject.from((await this._channel.addInitScript({ source })).disposable);
   }
 
-  async exposeBinding(name: string, callback: (source: structs.BindingSource, ...args: any[]) => any, options: { handle?: boolean } = {}): Promise<void> {
-    await this._channel.exposeBinding({ name, needsHandle: options.handle });
+  async exposeBinding(name: string, callback: (source: structs.BindingSource, ...args: any[]) => any): Promise<DisposableObject> {
+    const result = await this._channel.exposeBinding({ name });
     this._bindings.set(name, callback);
+    return DisposableObject.from(result.disposable);
   }
 
-  async exposeFunction(name: string, callback: Function): Promise<void> {
-    await this._channel.exposeBinding({ name });
+  async exposeFunction(name: string, callback: Function): Promise<DisposableObject> {
+    const result = await this._channel.exposeBinding({ name });
     const binding = (source: structs.BindingSource, ...args: any[]) => callback(...args);
     this._bindings.set(name, binding);
+    return DisposableObject.from(result.disposable);
   }
 
-  async route(url: URLMatch, handler: network.RouteHandlerCallback, options: { times?: number } = {}): Promise<void> {
+  async route(url: URLMatch, handler: network.RouteHandlerCallback, options: { times?: number } = {}): Promise<DisposableStub> {
     this._routes.unshift(new network.RouteHandler(this._platform, this._options.baseURL, url, handler, options.times));
     await this._updateInterceptionPatterns({ title: 'Route requests' });
+    return new DisposableStub(() => this.unroute(url, handler));
   }
 
   async routeWebSocket(url: URLMatch, handler: network.WebSocketRouteHandlerCallback): Promise<void> {
@@ -375,27 +385,12 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
     await this._updateWebSocketInterceptionPatterns({ title: 'Route WebSockets' });
   }
 
-  async _recordIntoHAR(har: string, page: Page | null, options: { url?: string | RegExp, updateContent?: 'attach' | 'embed' | 'omit', updateMode?: 'minimal' | 'full'} = {}): Promise<void> {
-    const { harId } = await this._channel.harStart({
-      page: page?._channel,
-      options: {
-        zip: har.endsWith('.zip'),
-        content: options.updateContent ?? 'attach',
-        urlGlob: isString(options.url) ? options.url : undefined,
-        urlRegexSource: isRegExp(options.url) ? options.url.source : undefined,
-        urlRegexFlags: isRegExp(options.url) ? options.url.flags : undefined,
-        mode: options.updateMode ?? 'minimal',
-      },
-    });
-    this._harRecorders.set(harId, { path: har, content: options.updateContent ?? 'attach' });
-  }
-
   async routeFromHAR(har: string, options: { url?: string | RegExp, notFound?: 'abort' | 'fallback', update?: boolean, updateContent?: 'attach' | 'embed', updateMode?: 'minimal' | 'full' } = {}): Promise<void> {
     const localUtils = this._connection.localUtils();
     if (!localUtils)
       throw new Error('Route from har is not supported in thin clients');
     if (options.update) {
-      await this._recordIntoHAR(har, null, options);
+      await this.tracing._recordIntoHAR(har, null, options);
       return;
     }
     const harRouter = await HarRouter.create(localUtils, har, options.notFound || 'abort', { urlMatch: options.url });
@@ -507,31 +502,13 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
   }
 
   async close(options: { reason?: string } = {}): Promise<void> {
-    if (this._closingStatus !== 'none')
+    if (this.isClosed())
       return;
     this._closeReason = options.reason;
     this._closingStatus = 'closing';
     await this.request.dispose(options);
     await this._instrumentation.runBeforeCloseBrowserContext(this);
-    await this._wrapApiCall(async () => {
-      for (const [harId, harParams] of this._harRecorders) {
-        const har = await this._channel.harExport({ harId });
-        const artifact = Artifact.from(har.artifact);
-        // Server side will compress artifact if content is attach or if file is .zip.
-        const isCompressed = harParams.content === 'attach' || harParams.path.endsWith('.zip');
-        const needCompressed = harParams.path.endsWith('.zip');
-        if (isCompressed && !needCompressed) {
-          const localUtils = this._connection.localUtils();
-          if (!localUtils)
-            throw new Error('Uncompressed har is not supported in thin clients');
-          await artifact.saveAs(harParams.path + '.tmp');
-          await localUtils.harUnzip({ zipFile: harParams.path + '.tmp', harFile: harParams.path });
-        } else {
-          await artifact.saveAs(harParams.path);
-        }
-        await artifact.delete();
-      }
-    }, { internal: true });
+    await this.tracing._exportAllHars();
     await this._channel.close(options);
     await this._closedPromise;
   }
@@ -551,44 +528,6 @@ export class BrowserContext extends ChannelOwner<channels.BrowserContextChannel>
     await this._channel.exposeConsoleApi();
   }
 
-  _setAllowedProtocols(protocols: string[]) {
-    this._allowedProtocols = protocols;
-  }
-
-  _checkUrlAllowed(url: string) {
-    if (!this._allowedProtocols)
-      return;
-    let parsedURL;
-    try {
-      parsedURL = new URL(url);
-    } catch (e) {
-      throw new Error(`Access to ${url} is blocked. Invalid URL: ${e.message}`);
-    }
-    if (!this._allowedProtocols.includes(parsedURL.protocol))
-      throw new Error(`Access to "${parsedURL.protocol}" URL is blocked. Allowed protocols: ${this._allowedProtocols.join(', ')}. Attempted URL: ${url}`);
-  }
-
-  _setAllowedDirectories(rootDirectories: string[]) {
-    this._allowedDirectories = rootDirectories;
-  }
-
-  _checkFileAccess(filePath: string) {
-    if (!this._allowedDirectories)
-      return;
-    const path = this._platform.path().resolve(filePath);
-    const isInsideDir = (container: string, child: string): boolean => {
-      const path = this._platform.path();
-      const rel = path.relative(container, child);
-      return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
-    };
-    if (this._allowedDirectories.some(root => isInsideDir(root, path)))
-      return;
-    throw new Error(`File access denied: ${filePath} is outside allowed roots. Allowed roots: ${this._allowedDirectories.length ? this._allowedDirectories.join(', ') : 'none'}`);
-  }
-
-  async _devtoolsStart(): Promise<{ url: string }> {
-    return await this._channel.devtoolsStart();
-  }
 }
 
 async function prepareStorageState(platform: Platform, storageState: string | SetStorageState): Promise<NonNullable<channels.BrowserNewContextParams['storageState']>> {
@@ -603,8 +542,6 @@ async function prepareStorageState(platform: Platform, storageState: string | Se
 }
 
 export async function prepareBrowserContextParams(platform: Platform, options: BrowserContextOptions): Promise<channels.BrowserNewContextParams> {
-  if (options.videoSize && !options.videosPath)
-    throw new Error(`"videoSize" option requires "videosPath" to be specified`);
   if (options.extraHTTPHeaders)
     network.validateHeaders(options.extraHTTPHeaders);
   const contextParams: channels.BrowserNewContextParams = {
@@ -621,12 +558,6 @@ export async function prepareBrowserContextParams(platform: Platform, options: B
     acceptDownloads: toAcceptDownloadsProtocol(options.acceptDownloads),
     clientCertificates: await toClientCertificatesProtocol(platform, options.clientCertificates),
   };
-  if (!contextParams.recordVideo && options.videosPath) {
-    contextParams.recordVideo = {
-      dir: options.videosPath,
-      size: options.videoSize
-    };
-  }
   if (contextParams.recordVideo && contextParams.recordVideo.dir)
     contextParams.recordVideo.dir = platform.path().resolve(contextParams.recordVideo.dir);
   return contextParams;

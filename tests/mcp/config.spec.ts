@@ -17,8 +17,7 @@
 import fs from 'node:fs';
 
 import { test, expect, parseResponse } from './fixtures';
-import { resolveCLIConfig } from '../../packages/playwright/lib/mcp/browser/config';
-import type { Config } from '../../packages/playwright/src/mcp/config';
+import type { Config } from '../../packages/playwright-core/src/tools/mcp/config.d';
 
 test('config user data dir', async ({ startClient, server }, testInfo) => {
   server.setContent('/', `
@@ -33,6 +32,33 @@ test('config user data dir', async ({ startClient, server }, testInfo) => {
   };
   const configPath = testInfo.outputPath('config.json');
   await fs.promises.writeFile(configPath, JSON.stringify(config, null, 2));
+
+  const { client } = await startClient({ args: ['--config', configPath] });
+  expect(await client.callTool({
+    name: 'browser_navigate',
+    arguments: { url: server.PREFIX },
+  })).toHaveResponse({
+    snapshot: expect.stringContaining(`Hello, world!`),
+  });
+
+  const files = await fs.promises.readdir(config.browser!.userDataDir!);
+  expect(files.length).toBeGreaterThan(0);
+});
+
+test('config with UTF-8 BOM', async ({ startClient, server }, testInfo) => {
+  server.setContent('/', `
+    <title>Title</title>
+    <body>Hello, world!</body>
+  `, 'text/html');
+
+  const config: Config = {
+    browser: {
+      userDataDir: testInfo.outputPath('user-data-dir'),
+    },
+  };
+  const configPath = testInfo.outputPath('config.json');
+  // Write config with UTF-8 BOM prefix, as some Windows editors (Notepad, PowerShell) do.
+  await fs.promises.writeFile(configPath, '\uFEFF' + JSON.stringify(config, null, 2));
 
   const { client } = await startClient({ args: ['--config', configPath] });
   expect(await client.callTool({
@@ -78,17 +104,35 @@ test.describe(() => {
   });
 });
 
-async function sandboxOption(cli: any) {
-  const config: any = await resolveCLIConfig(cli);
-  return config.browser.launchOptions.chromiumSandbox;
-}
+test('config ignoreDefaultArgs merged with persistent mode defaults', async ({ startClient, mcpBrowser }, testInfo) => {
+  test.skip(!['chrome', 'chromium', 'msedge'].includes(mcpBrowser!), 'chrome://version is Chromium-specific');
+  const config: Config = {
+    browser: {
+      userDataDir: testInfo.outputPath('user-data-dir'),
+      launchOptions: {
+        ignoreDefaultArgs: ['--password-store=basic'],
+      },
+    },
+  };
+  const { client } = await startClient({ config });
 
-test('test sandbox configuration', async ({}) => {
-  expect(await sandboxOption({ browser: 'chromium' })).toBe(process.platform !== 'linux');
-  expect(await sandboxOption({ browser: 'chromium', sandbox: true })).toBe(true);
-  expect(await sandboxOption({ browser: 'chrome', sandbox: false })).toBe(false);
-  expect(await sandboxOption({ browser: 'chrome' })).toBe(true);
-  expect(await sandboxOption({ browser: 'msedge' })).toBe(true);
+  await client.callTool({
+    name: 'browser_navigate',
+    arguments: { url: 'chrome://version' },
+  });
+
+  const result = await client.callTool({
+    name: 'browser_evaluate',
+    arguments: { function: '() => document.getElementById("command_line").innerText' },
+  });
+  const commandLine = result.content[0].text;
+
+  // User-specified arg should be removed.
+  expect(commandLine).not.toContain('--password-store=basic');
+  // Persistent mode's built-in --disable-extensions should also be removed.
+  expect(commandLine).not.toContain('--disable-extensions');
+  // Other default args should still be present.
+  expect(commandLine).toContain('--use-mock-keychain');
 });
 
 test('browser_get_config returns merged config from file, env and cli', async ({ startClient }) => {

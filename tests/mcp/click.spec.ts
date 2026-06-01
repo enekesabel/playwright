@@ -37,7 +37,7 @@ test('browser_click', async ({ client, server }) => {
     name: 'browser_click',
     arguments: {
       element: 'Submit button',
-      ref: 'e2',
+      target: 'e2',
     },
   })).toHaveResponse({
     code: `await page.getByRole('button', { name: 'Submit' }).click();`,
@@ -65,7 +65,7 @@ test('browser_click (double)', async ({ client, server }) => {
     name: 'browser_click',
     arguments: {
       element: 'Click me',
-      ref: 'e2',
+      target: 'e2',
       doubleClick: true,
     },
   })).toHaveResponse({
@@ -94,12 +94,16 @@ test('browser_click (right)', async ({ client, server }) => {
     name: 'browser_click',
     arguments: {
       element: 'Menu',
-      ref: 'e2',
+      target: 'e2',
       button: 'right',
     },
   });
   expect(result).toHaveResponse({
-    code: `await page.getByRole('button', { name: 'Menu' }).click({ button: 'right' });`,
+    code: [
+      `await page.getByRole('button', { name: 'Menu' }).click({`,
+      `  button: 'right'`,
+      `});`
+    ].join('\n'),
     snapshot: expect.stringContaining(`button "Right clicked"`),
   });
 });
@@ -126,11 +130,15 @@ test('browser_click (modifiers)', async ({ client, server, mcpBrowser }) => {
       name: 'browser_click',
       arguments: {
         element: 'Submit button',
-        ref: 'e2',
+        target: 'e2',
         modifiers: ['Control'],
       },
     })).toHaveResponse({
-      code: `await page.getByRole('button', { name: 'Submit' }).click({ modifiers: ['Control'] });`,
+      code: [
+        `await page.getByRole('button', { name: 'Submit' }).click({`,
+        `  modifiers: ['Control']`,
+        `});`
+      ].join('\n'),
       snapshot: expect.stringContaining(`generic [ref=e3]: ctrlKey:true metaKey:false shiftKey:false altKey:false`),
     });
   }
@@ -139,11 +147,15 @@ test('browser_click (modifiers)', async ({ client, server, mcpBrowser }) => {
     name: 'browser_click',
     arguments: {
       element: 'Submit button',
-      ref: 'e2',
+      target: 'e2',
       modifiers: ['Shift'],
     },
   })).toHaveResponse({
-    code: `await page.getByRole('button', { name: 'Submit' }).click({ modifiers: ['Shift'] });`,
+    code: [
+      `await page.getByRole('button', { name: 'Submit' }).click({`,
+      `  modifiers: ['Shift']`,
+      `});`
+    ].join('\n'),
     snapshot: expect.stringContaining(`generic [ref=e3]: ctrlKey:false metaKey:false shiftKey:true altKey:false`),
   });
 
@@ -151,11 +163,15 @@ test('browser_click (modifiers)', async ({ client, server, mcpBrowser }) => {
     name: 'browser_click',
     arguments: {
       element: 'Submit button',
-      ref: 'e2',
+      target: 'e2',
       modifiers: ['Shift', 'Alt'],
     },
   })).toHaveResponse({
-    code: `await page.getByRole('button', { name: 'Submit' }).click({ modifiers: ['Shift', 'Alt'] });`,
+    code: [
+      `await page.getByRole('button', { name: 'Submit' }).click({`,
+      `  modifiers: ['Shift', 'Alt']`,
+      `});`
+    ].join('\n'),
     snapshot: expect.stringContaining(`generic [ref=e3]: ctrlKey:false metaKey:false shiftKey:true altKey:true`),
   });
 });
@@ -180,9 +196,31 @@ test('browser_click (test id attribute)', async ({ startClient, server, mcpBrows
     name: 'browser_click',
     arguments: {
       element: 'Submit button',
-      ref: 'e2',
+      target: 'e2',
     },
   })).toHaveResponse({
     code: `await page.getByTestId('submit').click();`,
+  });
+});
+
+test('browser_click (locator target containing aria-ref-like substring)', async ({ client, server }) => {
+  server.setContent('/', `
+    <title>Title</title>
+    <button id="z2l9e43l3">Submit</button>
+  `, 'text/html');
+
+  await client.callTool({
+    name: 'browser_navigate',
+    arguments: { url: server.PREFIX },
+  });
+
+  expect(await client.callTool({
+    name: 'browser_click',
+    arguments: {
+      element: 'Submit button',
+      target: '#z2l9e43l3',
+    },
+  })).toHaveResponse({
+    code: `await page.locator('#z2l9e43l3').click();`,
   });
 });

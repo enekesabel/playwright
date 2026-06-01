@@ -17,28 +17,32 @@
 import EventEmitter from 'events';
 import fs from 'fs';
 
-import { isUnderTest } from '../utils';
+import { locatorOrSelectorAsSelector } from '@isomorphic/locatorParser';
+import { stringifySelector } from '@isomorphic/selectorParser';
+import { ManualPromise } from '@isomorphic/manualPromise';
+import { isUnderTest } from '@utils/debug';
+import { eventsHelper } from '@utils/eventsHelper';
+import { monotonicTime } from '@isomorphic/time';
 import { BrowserContext } from './browserContext';
 import { Debugger } from './debugger';
 import { buildFullSelector, generateFrameSelector, metadataToCallLog } from './recorder/recorderUtils';
-import { locatorOrSelectorAsSelector } from '../utils/isomorphic/locatorParser';
-import { stringifySelector } from '../utils/isomorphic/selectorParser';
-import { ProgressController } from './progress';
+import { nullProgress, ProgressController } from './progress';
+
 import { RecorderSignalProcessor } from './recorder/recorderSignalProcessor';
 import * as rawRecorderSource from './../generated/pollingRecorderSource';
-import { eventsHelper, monotonicTime } from './../utils';
 import { Frame } from './frames';
 import { Page } from './page';
 import { performAction } from './recorder/recorderRunner';
 
 import type { Language } from './codegen/types';
 import type { CallMetadata, InstrumentationListener, SdkObject } from './instrumentation';
-import type { Point } from '../utils/isomorphic/types';
+import type { Point } from '@isomorphic/types';
 import type { AriaTemplateNode } from '@isomorphic/ariaSnapshot';
+import type { Progress } from './progress';
 import type * as channels from '@protocol/channels';
 import type * as actions from '@recorder/actions';
 import type { CallLog, CallLogStatus, ElementInfo, Mode, OverlayState, Source, UIState } from '@recorder/recorderTypes';
-import type { RegisteredListener } from '../utils';
+import type { RegisteredListener } from '@utils/eventsHelper';
 
 const recorderSymbol = Symbol('recorderSymbol');
 
@@ -77,6 +81,7 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
   private _highlightedElement: { selector?: string, ariaTemplate?: AriaTemplateNode } = {};
   private _overlayState: OverlayState = { offsetX: 0 };
   private _currentCallsMetadata = new Map<CallMetadata, SdkObject>();
+  private _actionPoints = new Map<string, Point>();
   private _userSources = new Map<string, Source>();
   private _debugger: Debugger;
   private _omitCallTracking = false;
@@ -91,6 +96,7 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
   private _listeners: RegisteredListener[] = [];
   private _enabled: boolean = false;
   private _callLogs: CallLog[] = [];
+  private _pickLocatorPage: Page | undefined;
 
   static forContext(context: BrowserContext, params: RecorderParams): Promise<Recorder> {
     let recorderPromise = (context as any)[recorderSymbol] as Promise<Recorder>;
@@ -150,12 +156,6 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
     }
   }
 
-  private async _debugLog(...args: any[]) {
-    if (isUnderTest())
-      // eslint-disable-next-line no-console
-      console.log(monotonicTime(), ...args);
-  }
-
   private async _install() {
     this.emit(RecorderEvent.ModeChanged, this._mode);
     this.emit(RecorderEvent.PausedStateChanged, this._debugger.isPaused());
@@ -168,12 +168,7 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
 
     const controller = new ProgressController();
     await controller.run(async progress => {
-      if (isUnderTest()) {
-        await this._context.exposeBinding(progress, '__pw_recorderLog', false, async ({ frame }, args: any[]) => {
-          this._debugLog('__pw_recorderLog', ...args);
-        });
-      }
-      await this._context.exposeBinding(progress, '__pw_recorderState', false, async source => {
+      await this._context.exposeBinding(progress, '__pw_recorderState', async source => {
         let actionSelector: string | undefined;
         let actionPoint: Point | undefined;
         const hasActiveScreenshotCommand = [...this._currentCallsMetadata.keys()].some(isScreenshotCommand);
@@ -181,13 +176,16 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
           actionSelector = await this._scopeHighlightedSelectorToFrame(source.frame);
           for (const [metadata, sdkObject] of this._currentCallsMetadata) {
             if (source.page === sdkObject.attribution.page) {
-              actionPoint = metadata.point || actionPoint;
+              actionPoint = this._actionPoints.get(metadata.id) || actionPoint;
               actionSelector = actionSelector || metadata.params.selector;
             }
           }
         }
+        let mode = this._mode;
+        if (this._pickLocatorPage && source.page !== this._pickLocatorPage)
+          mode = 'none';
         const uiState: UIState = {
-          mode: this._mode,
+          mode,
           actionPoint,
           actionSelector,
           ariaTemplate: this._highlightedElement.ariaTemplate,
@@ -195,34 +193,28 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
           testIdAttributeName: this._testIdAttributeName(),
           overlay: this._overlayState,
         };
-        this._debugLog('__pw_recorderState', uiState);
         return uiState;
       });
 
-      await this._context.exposeBinding(progress, '__pw_recorderElementPicked', false, async ({ frame }, elementInfo: ElementInfo) => {
-        this._debugLog('__pw_recorderElementPicked', elementInfo);
-        const selectorChain = await generateFrameSelector(frame);
-        this._debugLog('__pw_recorderElementPicked selector', selectorChain);
+      await this._context.exposeBinding(progress, '__pw_recorderElementPicked', async ({ frame }, elementInfo: ElementInfo) => {
+        const selectorChain = await generateFrameSelector(progress, frame);
         this.emit(RecorderEvent.ElementPicked, { selector: buildFullSelector(selectorChain, elementInfo.selector), ariaSnapshot: elementInfo.ariaSnapshot }, true);
       });
 
-      await this._context.exposeBinding(progress, '__pw_recorderSetMode', false, async ({ frame }, mode: Mode) => {
-        this._debugLog('__pw_recorderSetMode', mode);
+      await this._context.exposeBinding(progress, '__pw_recorderSetMode', async ({ frame }, mode: Mode) => {
         if (frame.parentFrame())
           return;
-        this.setMode(mode);
+        await this.setMode(mode);
       });
 
-      await this._context.exposeBinding(progress, '__pw_recorderSetOverlayState', false, async ({ frame }, state: OverlayState) => {
-        this._debugLog('__pw_recorderSetOverlayState', state);
+      await this._context.exposeBinding(progress, '__pw_recorderSetOverlayState', async ({ frame }, state: OverlayState) => {
         if (frame.parentFrame())
           return;
         this._overlayState = state;
       });
 
-      await this._context.exposeBinding(progress, '__pw_resume', false, () => {
-        this._debugLog('__pw_resume');
-        this._debugger.resume(false);
+      await this._context.exposeBinding(progress, '__pw_resume', () => {
+        this._debugger.resume();
       });
 
       this._context.on(BrowserContext.Events.Page, (page: Page) => this._onPage(page));
@@ -236,14 +228,14 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
 
       // Input actions that potentially lead to navigation are intercepted on the page and are
       // performed by the Playwright.
-      await this._context.exposeBinding(progress, '__pw_recorderPerformAction', false,
-          (source: BindingSource, action: actions.PerformOnRecordAction) => this._performAction(source.frame, action));
+      await this._context.exposeBinding(progress, '__pw_recorderPerformAction',
+          (source: BindingSource, action: actions.PerformOnRecordAction) => this._performAction(progress, source.frame, action));
 
       // Other non-essential actions are simply being recorded.
-      await this._context.exposeBinding(progress, '__pw_recorderRecordAction', false,
-          (source: BindingSource, action: actions.Action) => this._recordAction(source.frame, action));
+      await this._context.exposeBinding(progress, '__pw_recorderRecordAction',
+          (source: BindingSource, action: actions.Action) => this._recordAction(progress, source.frame, action));
 
-      await this._context.extendInjectedScript(rawRecorderSource.source, { recorderMode: this._recorderMode, hideToolbar: !!this._params.hideToolbar });
+      await progress.race(this._context.extendInjectedScript(rawRecorderSource.source, { recorderMode: this._recorderMode, hideToolbar: !!this._params.hideToolbar }));
     });
 
     if (this._debugger.isPaused())
@@ -252,23 +244,20 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
   }
 
   private _pausedStateChanged() {
-    this._debugLog('_pausedStateChanged');
     // If we are called upon page.pause, we don't have metadatas, populate them.
-    for (const { metadata, sdkObject } of this._debugger.pausedDetails()) {
-      if (!this._currentCallsMetadata.has(metadata))
-        this.onBeforeCall(sdkObject, metadata);
-    }
+    const pausedDetails = this._debugger.pausedDetails();
+    if (pausedDetails && !this._currentCallsMetadata.has(pausedDetails.metadata))
+      this.onBeforeCall(pausedDetails.sdkObject, pausedDetails.metadata);
     this.emit(RecorderEvent.PausedStateChanged, this._debugger.isPaused());
     this._updateUserSources();
-    this.updateCallLog([...this._currentCallsMetadata.keys()]);
+    this._updateCallLog([...this._currentCallsMetadata.keys()]);
   }
 
   mode() {
     return this._mode;
   }
 
-  setMode(mode: Mode) {
-    this._debugLog('setMode', mode);
+  async setMode(mode: Mode) {
     if (this._mode === mode)
       return;
     this._highlightedElement = {};
@@ -276,9 +265,49 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
     this.emit(RecorderEvent.ModeChanged, this._mode);
     this._setEnabled(this._isRecording());
     this._debugger.setMuted(this._isRecording());
-    if (this._mode !== 'none' && this._mode !== 'standby' && this._context.pages().length === 1)
-      this._context.pages()[0].bringToFront().catch(() => {});
-    this._refreshOverlay();
+    if (this._mode !== 'none' && this._mode !== 'standby') {
+      let pageToFocus = this._pickLocatorPage;
+      if (!pageToFocus && this._context.pages().length === 1)
+        pageToFocus = this._context.pages()[0];
+      pageToFocus?.bringToFront(nullProgress).catch(() => {});
+    }
+    await this._refreshOverlay();
+  }
+
+  async pickLocator(progress: Progress, page: Page): Promise<string> {
+    if (this._mode !== 'none')
+      await progress.race(this.setMode('none'));
+
+    const selectorPromise = new ManualPromise<string>();
+    let recorderChangedState = false;
+    const onElementPicked = (elementInfo: ElementInfo) => {
+      selectorPromise.resolve(elementInfo.selector);
+    };
+    const onModeChanged = () => {
+      if (this._mode === 'inspecting')
+        return;
+      recorderChangedState = true;
+      selectorPromise.reject(new Error('Locator picking was cancelled'));
+    };
+    const listeners: RegisteredListener[] = [
+      eventsHelper.addEventListener(this, RecorderEvent.ElementPicked, onElementPicked),
+      eventsHelper.addEventListener(this, RecorderEvent.ModeChanged, onModeChanged),
+    ];
+    try {
+      const doPickLocator = async () => {
+        // Prevent unhandled rejection in case of cancellation during setMode
+        selectorPromise.catch(() => {});
+        this._pickLocatorPage = page;
+        await this.setMode('inspecting');
+        return await selectorPromise;
+      };
+      return await progress.race(page.openScope.race(doPickLocator()));
+    } finally {
+      eventsHelper.removeEventListeners(listeners);
+      this._pickLocatorPage = undefined;
+      if (!recorderChangedState)
+        await progress.race(this.setMode('none'));
+    }
   }
 
   url(): string | undefined {
@@ -286,32 +315,32 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
     return page?.mainFrame().url();
   }
 
-  setHighlightedSelector(selector: string) {
-    this._debugLog('setHighlightedSelector', selector);
+  async setHighlightedSelector(selector: string) {
     this._highlightedElement = { selector: locatorOrSelectorAsSelector(this._currentLanguage, selector, this._context.selectors().testIdAttributeName()) };
-    this._refreshOverlay();
+    await this._refreshOverlay();
   }
 
-  setHighlightedAriaTemplate(ariaTemplate: AriaTemplateNode) {
+  async setHighlightedAriaTemplate(ariaTemplate: AriaTemplateNode) {
     this._highlightedElement = { ariaTemplate };
-    this._refreshOverlay();
+    await this._refreshOverlay();
   }
 
   step() {
-    this._debugger.resume(true);
+    this._debugger.setPauseAt({ next: true });
+    this._debugger.resume();
   }
 
-  setLanguage(language: Language) {
+  async setLanguage(language: Language) {
     this._currentLanguage = language;
-    this._refreshOverlay();
+    await this._refreshOverlay();
   }
 
   resume() {
-    this._debugger.resume(false);
+    this._debugger.resume();
   }
 
   pause() {
-    this._debugger.pauseOnNextStatement();
+    this._debugger.setPauseAt({ next: true });
   }
 
   paused() {
@@ -319,22 +348,20 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
   }
 
   close() {
-    this._debugger.resume(false);
+    this._debugger.resume();
   }
 
-  hideHighlightedSelector() {
+  async hideHighlightedSelector() {
     this._highlightedElement = {};
-    this._refreshOverlay();
+    await this._refreshOverlay();
   }
 
   pausedSourceId() {
-    for (const { metadata } of this._debugger.pausedDetails()) {
-      if (!metadata.location)
-        continue;
-      const source = this._userSources.get(metadata.location.file);
-      if (!source)
-        continue;
-      return source.id;
+    const pausedDetails = this._debugger.pausedDetails();
+    if (pausedDetails?.metadata.location) {
+      const source = this._userSources.get(pausedDetails.metadata.location.file);
+      if (source)
+        return source.id;
     }
   }
 
@@ -371,20 +398,17 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
     }
   }
 
-  private _refreshOverlay() {
-    for (const page of this._context.pages()) {
-      for (const frame of page.frames())
-        frame.evaluateExpression('window.__pw_refreshOverlay()').catch(() => {});
-    }
+  private async _refreshOverlay() {
+    await Promise.all(this._context.pages().map(
+        page => page.safeNonStallingEvaluateInAllFrames('window.__pw_refreshOverlay()', 'main')));
   }
 
   async onBeforeCall(sdkObject: SdkObject, metadata: CallMetadata) {
     if (this._omitCallTracking || this._isRecording())
       return;
-    this._debugLog('onBeforeCall', metadata.method, metadata.params);
     this._currentCallsMetadata.set(metadata, sdkObject);
     this._updateUserSources();
-    this.updateCallLog([metadata]);
+    this._updateCallLog([metadata]);
     if (isScreenshotCommand(metadata))
       this.hideHighlightedSelector();
     else if (metadata.params && metadata.params.selector)
@@ -392,13 +416,18 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
   }
 
   async onAfterCall(sdkObject: SdkObject, metadata: CallMetadata) {
+    this._actionPoints.delete(metadata.id);
     if (this._omitCallTracking || this._isRecording())
       return;
-    this._debugLog('onAfterCall', metadata.method, metadata.params);
     if (!metadata.error)
       this._currentCallsMetadata.delete(metadata);
     this._updateUserSources();
-    this.updateCallLog([metadata]);
+    this._updateCallLog([metadata]);
+  }
+
+  async onBeforeInputAction(sdkObject: SdkObject, metadata: CallMetadata, point?: Point): Promise<void> {
+    if (point)
+      this._actionPoints.set(metadata.id, point);
   }
 
   private _updateUserSources() {
@@ -427,14 +456,11 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
     this.emit(RecorderEvent.UserSourcesChanged, this.userSources(), this.pausedSourceId());
   }
 
-  async onBeforeInputAction(sdkObject: SdkObject, metadata: CallMetadata) {
-  }
-
   async onCallLog(sdkObject: SdkObject, metadata: CallMetadata, logName: string, message: string): Promise<void> {
-    this.updateCallLog([metadata]);
+    this._updateCallLog([metadata]);
   }
 
-  updateCallLog(metadatas: CallMetadata[]) {
+  private _updateCallLog(metadatas: CallMetadata[]) {
     if (this._isRecording())
       return;
     const logs: CallLog[] = [];
@@ -469,11 +495,9 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
   }
 
   private async _onPage(page: Page) {
-    this._debugLog('_onPage', page.guid);
     // First page is called page, others are called popup1, popup2, etc.
     const frame = page.mainFrame();
     page.on(Page.Events.Close, () => {
-      this._debugLog('close');
       this._signalProcessor.addAction({
         frame: this._describeMainFrame(page),
         action: {
@@ -486,8 +510,7 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
       this._filePrimaryURLChanged();
     });
     frame.on(Frame.Events.InternalNavigation, event => {
-      this._debugLog('internal navigation');
-      if (event.isPublic) {
+      if (event.isPublic && !event.error) {
         this._onFrameNavigated(frame, page);
         this._filePrimaryURLChanged();
       }
@@ -533,11 +556,11 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
     };
   }
 
-  private async _describeFrame(frame: Frame): Promise<actions.FrameDescription> {
+  private async _describeFrame(progress: Progress, frame: Frame): Promise<actions.FrameDescription> {
     return {
       pageGuid: frame._page.guid,
       pageAlias: this._pageAliases.get(frame._page)!,
-      framePath: await generateFrameSelector(frame),
+      framePath: await generateFrameSelector(progress, frame),
     };
   }
 
@@ -545,8 +568,8 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
     return this._params.testIdAttributeName || this._context.selectors().testIdAttributeName() || 'data-testid';
   }
 
-  private async _createActionInContext(frame: Frame, action: actions.Action): Promise<actions.ActionInContext> {
-    const frameDescription = await this._describeFrame(frame);
+  private async _createActionInContext(progress: Progress, frame: Frame, action: actions.Action): Promise<actions.ActionInContext> {
+    const frameDescription = await this._describeFrame(progress, frame);
     const actionInContext: actions.ActionInContext = {
       frame: frameDescription,
       action,
@@ -556,18 +579,16 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
     return actionInContext;
   }
 
-  private async _performAction(frame: Frame, action: actions.PerformOnRecordAction) {
-    this._debugLog('_performAction', action);
-    const actionInContext = await this._createActionInContext(frame, action);
+  private async _performAction(progress: Progress, frame: Frame, action: actions.PerformOnRecordAction) {
+    const actionInContext = await this._createActionInContext(progress, frame, action);
     this._signalProcessor.addAction(actionInContext);
     if (actionInContext.action.name !== 'openPage' && actionInContext.action.name !== 'closePage')
-      await performAction(this._pageAliases, actionInContext);
+      await performAction(progress, this._pageAliases, actionInContext);
     actionInContext.endTime = monotonicTime();
   }
 
-  private async _recordAction(frame: Frame, action: actions.Action) {
-    this._debugLog('_recordAction', action);
-    const actionInContext = await this._createActionInContext(frame, action);
+  private async _recordAction(progress: Progress, frame: Frame, action: actions.Action) {
+    const actionInContext = await this._createActionInContext(progress, frame, action);
     this._signalProcessor.addAction(actionInContext);
   }
 
@@ -577,21 +598,18 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
   }
 
   private _onPopup(page: Page, popup: Page) {
-    this._debugLog('popup');
     const pageAlias = this._pageAliases.get(page)!;
     const popupAlias = this._pageAliases.get(popup)!;
     this._signalProcessor.signal(pageAlias, page.mainFrame(), { name: 'popup', popupAlias });
   }
 
   private _onDownload(page: Page) {
-    this._debugLog('download');
     const pageAlias = this._pageAliases.get(page)!;
     ++this._lastDownloadOrdinal;
     this._signalProcessor.signal(pageAlias, page.mainFrame(), { name: 'download', downloadAlias: this._lastDownloadOrdinal ? String(this._lastDownloadOrdinal) : '' });
   }
 
   private _onDialog(page: Page) {
-    this._debugLog('onDialog');
     const pageAlias = this._pageAliases.get(page)!;
     ++this._lastDialogOrdinal;
     this._signalProcessor.signal(pageAlias, page.mainFrame(), { name: 'dialog', dialogAlias: this._lastDialogOrdinal ? String(this._lastDialogOrdinal) : '' });

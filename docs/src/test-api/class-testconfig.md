@@ -83,6 +83,7 @@ The structure of the git commit metadata is subject to change.
     - `pathTemplate` ?<[string]> A template controlling location of the screenshots. See [`property: TestConfig.snapshotPathTemplate`] for details.
   - `toMatchAriaSnapshot` ?<[Object]> Configuration for the [`method: LocatorAssertions.toMatchAriaSnapshot#2`] method.
     - `pathTemplate` ?<[string]> A template controlling location of the aria snapshots. See [`property: TestConfig.snapshotPathTemplate`] for details.
+    - `children` ?<["contain" | "equal" | "deep-equal"]> Controls how children of the snapshot root are matched against the actual accessibility tree. This is equivalent to adding a `/children` property at the top of every aria snapshot template. Individual snapshots can override this by including an explicit `/children` property.
   - `toMatchSnapshot` ?<[Object]> Configuration for the [`method: SnapshotAssertions.toMatchSnapshot#1`] method.
     - `maxDiffPixels` ?<[int]> An acceptable amount of pixels that could be different, unset by default.
     - `maxDiffPixelRatio` ?<[float]> An acceptable ratio of pixels that are different to the total amount of pixels, between `0` and `1` , unset by default.
@@ -514,15 +515,6 @@ export default defineConfig({
 });
 ```
 
-## property: TestConfig.runAgents
-* since: v1.58
-- type: ?<['RunAgentsMode]<"all"|"missing"|"none">>
-
-Whether to run LLM agent for [PageAgent]:
-* "all" disregards existing cache and performs all actions via LLM
-* "missing" only performs actions that don't have generated cache actions
-* "none" does not talk to LLM at all, relies on the cached actions (default)
-
 ## property: TestConfig.shard
 * since: v1.10
 - type: ?<[null]|[Object]>
@@ -698,26 +690,8 @@ export default defineConfig({
 });
 ```
 
-## property: TestConfig.webServer
+## property: TestConfig.webServer = %%-test-config-web-server-options-%%
 * since: v1.10
-- type: ?<[Object]|[Array]<[Object]>>
-  - `command` <[string]> Shell command to start. For example `npm run start`..
-  - `cwd` ?<[string]> Current working directory of the spawned process, defaults to the directory of the configuration file.
-  - `env` ?<[Object]<[string], [string]>> Environment variables to set for the command, `process.env` by default.
-  - `gracefulShutdown` ?<[Object]> How to shut down the process. If unspecified, the process group is forcefully `SIGKILL`ed. If set to `{ signal: 'SIGTERM', timeout: 500 }`, the process group is sent a `SIGTERM` signal, followed by `SIGKILL` if it doesn't exit within 500ms. You can also use `SIGINT` as the signal instead. A `0` timeout means no `SIGKILL` will be sent. Windows doesn't support `SIGTERM` and `SIGINT` signals, so this option is ignored on Windows. Note that shutting down a Docker container requires `SIGTERM`.
-    - `signal` <["SIGINT"|"SIGTERM"]>
-    - `timeout` <[int]>
-  - `ignoreHTTPSErrors` ?<[boolean]> Whether to ignore HTTPS errors when fetching the `url`. Defaults to `false`.
-  - `name` ?<[string]> Specifies a custom name for the web server. This name will be prefixed to log messages. Defaults to `[WebServer]`.
-  - `port` ?<[int]> The port that your http server is expected to appear on. It does wait until it accepts connections. Either `port` or `url` should be specified.
-  - `reuseExistingServer` ?<[boolean]> If true, it will re-use an existing server on the `port` or `url` when available. If no server is running on that `port` or `url`, it will run the command to start a new server. If `false`, it will throw if an existing process is listening on the `port` or `url`. This should be commonly set to `!process.env.CI` to allow the local dev server when running tests locally.
-  - `stderr` ?<["pipe"|"ignore"]> Whether to pipe the stderr of the command to the process stderr or ignore it. Defaults to `"pipe"`.
-  - `stdout` ?<["pipe"|"ignore"]> If `"pipe"`, it will pipe the stdout of the command to the process stdout. If `"ignore"`, it will ignore the stdout of the command. Default to `"ignore"`.
-  - `wait` ?<[Object]> Consider command started only when given output has been produced.
-    - `stdout` ?<[RegExp]> Regular expression to wait for in the `stdout` of the command output. Named capture groups are stored in the environment, for example `/Listening on port (?<my_server_port>\d+)/` will store the port number in `process.env['MY_SERVER_PORT']`.
-    - `stderr` ?<[RegExp]> Regular expression to wait for in the `stderr` of the command output. Named capture groups are stored in the environment, for example `/Listening on port (?<my_server_port>\d+)/` will store the port number in `process.env['MY_SERVER_PORT']`.
-  - `timeout` ?<[int]> How long to wait for the process to start up and be available in milliseconds. Defaults to 60000.
-  - `url` ?<[string]> The url on your http server that is expected to return a 2xx, 3xx, 400, 401, 402, or 403 status code when the server is ready to accept connections. Redirects (3xx status codes) are being followed and the new location is checked. Either `port` or `url` should be specified.
 
 Launch a development web server (or multiple) during the tests.
 

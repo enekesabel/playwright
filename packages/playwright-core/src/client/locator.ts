@@ -14,18 +14,19 @@
  * limitations under the License.
  */
 
+import { asLocatorDescription, locatorCustomDescription } from '@isomorphic/locatorGenerators';
+import { getByAltTextSelector, getByLabelSelector, getByPlaceholderSelector, getByRoleSelector, getByTestIdSelector, getByTextSelector, getByTitleSelector } from '@isomorphic/locatorUtils';
+import { escapeForTextSelector } from '@isomorphic/stringUtils';
+import { isString } from '@isomorphic/rtti';
+import { monotonicTime } from '@isomorphic/time';
 import { ElementHandle } from './elementHandle';
-import { asLocatorDescription, locatorCustomDescription } from '../utils/isomorphic/locatorGenerators';
-import { getByAltTextSelector, getByLabelSelector, getByPlaceholderSelector, getByRoleSelector, getByTestIdSelector, getByTextSelector, getByTitleSelector } from '../utils/isomorphic/locatorUtils';
-import { escapeForTextSelector } from '../utils/isomorphic/stringUtils';
-import { isString } from '../utils/isomorphic/rtti';
-import { monotonicTime } from '../utils/isomorphic/time';
+import { DisposableStub } from './disposable';
 
-import type { Frame } from './frame';
-import type { FilePayload, FrameExpectParams, Rect, SelectOption, SelectOptionOptions, TimeoutOptions } from './types';
+import type { ExpectResult, Frame } from './frame';
+import type { DropPayload, FilePayload, FrameExpectParams, Rect, SelectOption, SelectOptionOptions, TimeoutOptions } from './types';
 import type * as structs from '../../types/structs';
 import type * as api from '../../types/types';
-import type { ByRoleOptions } from '../utils/isomorphic/locatorUtils';
+import type { ByRoleOptions } from '@isomorphic/locatorUtils';
 import type * as channels from '@protocol/channels';
 
 
@@ -40,6 +41,7 @@ export type LocatorOptions = {
 export class Locator implements api.Locator {
   _frame: Frame;
   _selector: string;
+  _apiName = 'Locator';
 
   constructor(frame: Frame, selector: string, options?: LocatorOptions) {
     this._frame = frame;
@@ -124,12 +126,12 @@ export class Locator implements api.Locator {
     });
   }
 
-  async evaluate<R, Arg>(pageFunction: structs.PageFunctionOn<SVGElement | HTMLElement, Arg, R>, arg?: Arg, options?: TimeoutOptions): Promise<R> {
-    return await this._withElement(h => h.evaluate(pageFunction, arg), { title: 'Evaluate', timeout: options?.timeout });
+  async drop(payload: DropPayload, options: Omit<channels.FrameDropOptions, 'payloads' | 'localPaths' | 'streams' | 'data' | 'force' | 'trial'> & TimeoutOptions = {}) {
+    await this._frame._drop(this._selector, payload, { strict: true, ...options });
   }
 
-  async _evaluateFunction(functionDeclaration: string, options?: TimeoutOptions) {
-    return await this._withElement(h => h._evaluateFunction(functionDeclaration), { title: 'Evaluate', timeout: options?.timeout });
+  async evaluate<R, Arg>(pageFunction: structs.PageFunctionOn<SVGElement | HTMLElement, Arg, R>, arg?: Arg, options?: TimeoutOptions): Promise<R> {
+    return await this._withElement(h => h.evaluate(pageFunction, arg), { title: 'Evaluate', timeout: options?.timeout });
   }
 
   async evaluateAll<R, Arg>(pageFunction: structs.PageFunctionOn<Element[], Arg, R>, arg?: Arg): Promise<R> {
@@ -153,8 +155,14 @@ export class Locator implements api.Locator {
     return await this._frame._highlight(this._selector);
   }
 
-  async highlight() {
-    return await this._frame._highlight(this._selector);
+  async highlight(options: { style?: string | Record<string, string | number> } = {}) {
+    const style = typeof options.style === 'object' ? cssObjectToString(options.style) : options.style;
+    await this._frame._highlight(this._selector, style);
+    return new DisposableStub(() => this.hideHighlight());
+  }
+
+  async hideHighlight() {
+    await this._frame._hideHighlight(this._selector);
   }
 
   locator(selectorOrLocator: string | Locator, options?: Omit<LocatorOptions, 'visible'>): Locator {
@@ -258,13 +266,9 @@ export class Locator implements api.Locator {
     return await this._frame._queryCount(this._selector, _options);
   }
 
-  async _resolveSelector(): Promise<{ resolvedSelector: string }> {
-    return await this._frame._channel.resolveSelector({ selector: this._selector });
-  }
-
-  async _resolveForCode(): Promise<string> {
-    const { resolvedSelector } = await this._resolveSelector();
-    return asLocatorDescription('javascript', resolvedSelector);
+  async normalize(): Promise<Locator> {
+    const { resolvedSelector } = await this._frame._channel.resolveSelector({ selector: this._selector });
+    return new Locator(this._frame, resolvedSelector);
   }
 
   async getAttribute(name: string, options?: TimeoutOptions): Promise<string | null> {
@@ -320,8 +324,8 @@ export class Locator implements api.Locator {
     return await this._withElement((h, timeout) => h.screenshot({ ...options, mask, timeout }), { title: 'Screenshot', timeout: options.timeout });
   }
 
-  async ariaSnapshot(options?: TimeoutOptions): Promise<string> {
-    const result = await this._frame._channel.ariaSnapshot({ ...options, selector: this._selector, timeout: this._frame._timeout(options) });
+  async ariaSnapshot(options: TimeoutOptions & { mode?: 'ai' | 'default', depth?: number, boxes?: boolean } = {}): Promise<string> {
+    const result = await this._frame._channel.ariaSnapshot({ timeout: this._frame._timeout(options), mode: options.mode, selector: this._selector, depth: options.depth, boxes: options.boxes });
     return result.snapshot;
   }
 
@@ -386,7 +390,8 @@ export class Locator implements api.Locator {
     await this._frame._channel.waitForSelector({ selector: this._selector, strict: true, omitReturnValue: true, ...options, timeout: this._frame._timeout(options) });
   }
 
-  async _expect(expression: string, options: FrameExpectParams): Promise<{ matches: boolean, received?: any, log?: string[], timedOut?: boolean, errorMessage?: string }> {
+
+  async _expect(expression: string, options: FrameExpectParams): Promise<ExpectResult> {
     return this._frame._expect(expression, {
       ...options,
       selector: this._selector,
@@ -476,4 +481,11 @@ export function testIdAttributeName(): string {
 
 export function setTestIdAttribute(attributeName: string) {
   _testIdAttributeName = attributeName;
+}
+
+function cssObjectToString(style: Record<string, string | number>): string {
+  return Object.entries(style).map(([key, value]) => {
+    const property = key.startsWith('--') ? key : key.replace(/[A-Z]/g, m => '-' + m.toLowerCase());
+    return `${property}: ${value}`;
+  }).join('; ');
 }

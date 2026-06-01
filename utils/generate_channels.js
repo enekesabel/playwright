@@ -19,7 +19,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const yaml = require('yaml');
 
 const channels = new Map();
 const mixins = new Map();
@@ -159,7 +158,7 @@ const validator_ts = [
 
 import { scheme, tOptional, tObject, tBoolean, tInt, tFloat, tString, tAny, tEnum, tArray, tBinary, tChannel, tType } from './validatorPrimitives';
 export type { Validator, ValidatorContext } from './validatorPrimitives';
-export { ValidationError, findValidator, maybeFindValidator, createMetadataValidator } from './validatorPrimitives';
+export { ValidationError, findValidator, maybeFindValidator, createMetadataValidator, createWaitInfoValidator } from './validatorPrimitives';
 `];
 
 const metainfo_ts = [
@@ -184,8 +183,7 @@ const metainfo_ts = [
 
 const methodMetainfo = [];
 
-const yml = fs.readFileSync(path.join(__dirname, '..', 'packages', 'protocol', 'src', 'protocol.yml'), 'utf-8');
-const protocol = yaml.parse(yml);
+const protocol = require('./protocol_spec').loadProtocol();
 
 function addScheme(name, s) {
   validator_ts.push(`scheme.${name} = ${s};`);
@@ -210,9 +208,28 @@ for (const [name, item] of Object.entries(protocol)) {
   }
 }
 
+// Trait-cascade order: each `T extends FooChannel ?` must be tested before any
+// of its ancestors via `extends`. Sort interfaces children-first so the cascade
+// is correct regardless of how the spec files are ordered on disk.
+const interfaceEntries = Object.entries(protocol).filter(([, v]) => v.type === 'interface');
+const interfaceDepth = new Map();
+function depthOf(name) {
+  if (interfaceDepth.has(name)) return interfaceDepth.get(name);
+  const ancestor = protocol[name] && protocol[name].extends;
+  const d = ancestor && protocol[ancestor] && protocol[ancestor].type === 'interface'
+    ? depthOf(ancestor) + 1 : 0;
+  interfaceDepth.set(name, d);
+  return d;
+}
+for (const [name] of interfaceEntries) depthOf(name);
+// Stable sort by descending depth — children before ancestors.
+const entriesInReverse = interfaceEntries
+  .map((e, i) => ({ e, i }))
+  .sort((a, b) => depthOf(b.e[0]) - depthOf(a.e[0]) || a.i - b.i)
+  .map(x => x.e);
+
 channels_ts.push(`// ----------- Initializer Traits -----------`);
 channels_ts.push(`export type InitializerTraits<T> =`);
-const entriesInReverse = Object.entries(protocol).reverse();
 for (const [name, item] of entriesInReverse) {
   if (item.type !== 'interface')
     continue;
@@ -288,12 +305,8 @@ for (const [name, item] of Object.entries(protocol)) {
           throw new Error(`Method "${className}.${methodName}" has "slowMo" flag, so cannot be "internal" in protocol.yml`);
         if (method.flags?.snapshot && method.internal)
           throw new Error(`Method "${className}.${methodName}" has "snapshot" flag, so cannot be "internal" in protocol.yml`);
-        if (method.flags?.pausesBeforeInput && method.internal)
-          throw new Error(`Method "${className}.${methodName}" has "pausesBeforeInput" flag, so cannot be "internal" in protocol.yml`);
-        if (method.flags?.pausesBeforeAction && method.internal)
-          throw new Error(`Method "${className}.${methodName}" has "pausesBeforeAction" flag, so cannot be "internal" in protocol.yml`);
-        if (method.flags?.pausesBeforeInput && method.flags?.pausesBeforeAction)
-          throw new Error(`Method "${className}.${methodName}" cannot have both "pausesBeforeInput" and "pausesBeforeAction" flags in protocol.yml`);
+        if (method.flags?.pause && method.internal)
+          throw new Error(`Method "${className}.${methodName}" has "pause" flag, so cannot be "internal" in protocol.yml`);
         if (!method.title && !method.internal)
           throw new Error(`Method "${className}.${methodName}" must have a "title" because it is not "internal" in protocol.yml`);
         if (method.group && method.internal)
@@ -305,9 +318,11 @@ for (const [name, item] of Object.entries(protocol)) {
         const groupProp = method.group ? ` group: '${method.group}',` : '';
         const slowMoProp = method.flags?.slowMo ? ` slowMo: ${method.flags.slowMo},` : '';
         const snapshotProp = method.flags?.snapshot ? ` snapshot: ${method.flags.snapshot},` : '';
-        const pausesBeforeInputProp = method.flags?.pausesBeforeInput ? ` pausesBeforeInput: ${method.flags.pausesBeforeInput},` : '';
-        const pausesBeforeActionProp = method.flags?.pausesBeforeAction ? ` pausesBeforeAction: ${method.flags.pausesBeforeAction},` : '';
-        methodMetainfo.push(`['${className + '.' + methodName}', {${internalProp}${titleProp}${slowMoProp}${snapshotProp}${pausesBeforeInputProp}${pausesBeforeActionProp}${groupProp} }]`);
+        const pauseProp = method.flags?.pause ? ` pause: ${method.flags.pause},` : '';
+        const inputProp = method.flags?.input ? ` input: ${method.flags.input},` : '';
+        const isAutoWaitingProp = method.flags?.isAutoWaiting ? ` isAutoWaiting: ${method.flags.isAutoWaiting},` : '';
+        const potentiallyClosesScopeProp = method.flags?.potentiallyClosesScope ? ` potentiallyClosesScope: ${method.flags.potentiallyClosesScope},` : '';
+        methodMetainfo.push(`['${className + '.' + methodName}', {${internalProp}${titleProp}${slowMoProp}${snapshotProp}${pauseProp}${inputProp}${isAutoWaitingProp}${potentiallyClosesScopeProp}${groupProp} }]`);
       }
 
       const parameters = objectType(method.parameters || {}, '');
@@ -351,9 +366,15 @@ for (const [name, item] of Object.entries(protocol)) {
   }
 }
 
-metainfo_ts.push(`export const methodMetainfo = new Map<string, { internal?: boolean, title?: string, slowMo?: boolean, snapshot?: boolean, pausesBeforeInput?: boolean, pausesBeforeAction?: boolean, group?: string }>([
+metainfo_ts.push(`export type MethodMetainfo = { internal?: boolean, title?: string, slowMo?: boolean, snapshot?: boolean, pause?: boolean, isAutoWaiting?: boolean, input?: boolean, potentiallyClosesScope?: boolean, group?: string };
+
+export const methodMetainfo = new Map<string, MethodMetainfo>([
   ${methodMetainfo.join(`,\n  `)}
-]);`);
+]);
+
+export function getMetainfo(metadata: { type: string, method: string }): MethodMetainfo | undefined {
+  return methodMetainfo.get(metadata.type + '.' + metadata.method);
+}`);
 
 let hasChanges = false;
 
@@ -371,6 +392,6 @@ function writeFile(filePath, content) {
 }
 
 writeFile(path.join(__dirname, '..', 'packages', 'protocol', 'src', 'channels.d.ts'), channels_ts.join('\n') + '\n');
-writeFile(path.join(__dirname, '..', 'packages', 'playwright-core', 'src', 'utils', 'isomorphic', 'protocolMetainfo.ts'), metainfo_ts.join('\n') + '\n');
+writeFile(path.join(__dirname, '..', 'packages', 'isomorphic', 'protocolMetainfo.ts'), metainfo_ts.join('\n') + '\n');
 writeFile(path.join(__dirname, '..', 'packages', 'playwright-core', 'src', 'protocol', 'validator.ts'), validator_ts.join('\n') + '\n');
 process.exit(hasChanges ? 1 : 0);

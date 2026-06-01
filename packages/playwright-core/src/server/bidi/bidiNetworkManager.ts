@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
-import { eventsHelper } from '../utils/eventsHelper';
+import { eventsHelper } from '@utils/eventsHelper';
 import { parseRawCookie } from '../cookieStore';
 import * as network from '../network';
 import * as bidi from './third_party/bidiProtocol';
 
-import type { RegisteredListener } from '../utils/eventsHelper';
+import type { RegisteredListener } from '@utils/eventsHelper';
 import type * as frames from '../frames';
 import type { Page } from '../page';
 import type * as types from '../types';
 import type { BidiSession } from './bidiConnection';
+import type { BidiPage } from './bidiPage';
 
 const REQUEST_BODY_HEADERS = new Set(['content-encoding', 'content-language', 'content-location', 'content-type']);
 
@@ -149,6 +150,7 @@ export class BidiNetworkManager {
     const response = new network.Response(request.request, params.response.status, params.response.statusText, fromBidiHeaders(params.response.headers), timing, getResponseBody, false);
     response._serverAddrFinished();
     response._securityDetailsFinished();
+    response._setHttpVersion(params.response.protocol);
     // "raw" headers are the same as "provisional" headers in Bidi.
     response.setRawResponseHeaders(null);
     response.setResponseHeadersSize(params.response.headersSize);
@@ -173,7 +175,6 @@ export class BidiNetworkManager {
       this._deleteRequest(request._id);
       response._requestFinished(responseEndTime);
     }
-    response._setHttpVersion(params.response.protocol);
     this._page.frameManager.reportRequestFinished(request.request, response);
 
   }
@@ -245,13 +246,13 @@ export class BidiNetworkManager {
     this._protocolRequestInterceptionEnabled = enabled;
     if (initial && !enabled)
       return;
-    const cachePromise = this._session.send('network.setCacheBehavior', { cacheBehavior: enabled ? 'bypass' : 'default' });
+    const contexts: [string] = [(this._page.delegate as BidiPage)._session.sessionId];
+    const cachePromise = this._session.send('network.setCacheBehavior', { cacheBehavior: enabled ? 'bypass' : 'default', contexts });
     let interceptPromise = Promise.resolve<any>(undefined);
     if (enabled) {
       interceptPromise = this._session.send('network.addIntercept', {
-        phases: [bidi.Network.InterceptPhase.AuthRequired, bidi.Network.InterceptPhase.BeforeRequestSent],
-        urlPatterns: [{ type: 'pattern' }],
-        // urlPatterns: [{ type: 'string', pattern: '*' }],
+        phases: [bidi.Network.InterceptPhase.BeforeRequestSent],
+        contexts,
       }).then(r => {
         this._intercepId = r.intercept;
       });
@@ -339,11 +340,12 @@ class BidiRouteImpl implements network.RouteDelegate {
 
   async fulfill(response: types.NormalizedFulfillResponse) {
     const base64body = response.isBase64 ? response.body : Buffer.from(response.body).toString('base64');
+    const headers = response.headers.filter(h => h.name.toLowerCase() !== 'content-encoding');
     await this._session.sendMayFail('network.provideResponse', {
       request: this._requestId,
       statusCode: response.status,
       reasonPhrase: network.statusText(response.status),
-      ...toBidiResponseHeaders(response.headers),
+      ...toBidiResponseHeaders(headers),
       body: { type: 'base64', value: base64body },
     });
   }

@@ -19,15 +19,16 @@ import * as os from 'os';
 import * as path from 'path';
 import { baseTest } from './baseTest';
 import { RunServer, RemoteServer } from './remoteServer';
-import { removeFolders } from '../../packages/playwright-core/lib/server/utils/fileUtils';
+import { utils } from '../../packages/playwright-core/lib/coreBundle';
 import { isBidiChannel, parseHar } from '../config/utils';
 import { createSkipTestPredicate } from '../bidi/expectationUtil';
-
 import type { PageTestFixtures, PageWorkerFixtures } from '../page/pageTestApi';
 import type { RemoteServerOptions, PlaywrightServer } from './remoteServer';
 import type { BrowserContext, BrowserContextOptions, BrowserType, Page } from 'playwright-core';
 import type { Log } from '../../packages/trace/src/har';
 import type { TestInfo } from '@playwright/test';
+
+const { removeFolders, hostPlatform } = utils;
 
 export type BrowserTestWorkerFixtures = PageWorkerFixtures & {
   browserVersion: string;
@@ -38,13 +39,14 @@ export type BrowserTestWorkerFixtures = PageWorkerFixtures & {
   isAndroid: boolean;
   isElectron: boolean;
   isHeadlessShell: boolean;
+  isFrozenWebkit: boolean;
   nodeVersion: { major: number, minor: number, patch: number };
   isBidi: boolean;
   bidiTestSkipPredicate: (info: TestInfo) => boolean;
 };
 
 interface StartRemoteServer {
-  (kind: 'run-server' | 'launchServer'): Promise<PlaywrightServer>;
+  (kind: 'run-server' | 'launchServer', options?: RemoteServerOptions): Promise<PlaywrightServer>;
   (kind: 'launchServer', options?: RemoteServerOptions): Promise<RemoteServer>;
 }
 
@@ -63,7 +65,6 @@ const test = baseTest.extend<BrowserTestTestFixtures, BrowserTestWorkerFixtures>
   }, { scope: 'worker' }],
 
   browserType: [async ({ playwright, browserName, mode }, run) => {
-    test.skip(mode === 'service2');
     await run(playwright[browserName]);
   }, { scope: 'worker' }],
 
@@ -108,6 +109,10 @@ const test = baseTest.extend<BrowserTestTestFixtures, BrowserTestWorkerFixtures>
     const isShell = channel === 'chromium-headless-shell' || (!channel && headless);
     const isToTShell = channel === 'chromium-tip-of-tree-headless-shell' || (channel === 'chromium-tip-of-tree' && headless);
     await use(browserName === 'chromium' && (isShell || isToTShell));
+  }, { scope: 'worker' }],
+
+  isFrozenWebkit: [async ({ browserName, isMac, macVersion }, use) => {
+    await use(browserName === 'webkit' && (hostPlatform.startsWith('debian11') || hostPlatform.startsWith('ubuntu20.04') || (isMac && macVersion < 15)));
   }, { scope: 'worker' }],
 
   contextFactory: async ({ _contextFactory }: any, run) => {
@@ -163,7 +168,7 @@ const test = baseTest.extend<BrowserTestTestFixtures, BrowserTestWorkerFixtures>
         server = remoteServer;
       } else {
         const runServer = new RunServer();
-        await runServer.start(childProcess);
+        await runServer.start(childProcess, { artifactsDir: options?.artifactsDir });
         server = runServer;
       }
       return server;

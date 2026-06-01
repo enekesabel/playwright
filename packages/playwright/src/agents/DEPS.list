@@ -1,8 +1,9 @@
 [*]
-../mcp/browser/
-../mcp/sdk/
+@isomorphic/**
+@utils/**
 ../mcp/test/
-../common/
+node_modules/colors/safe
+node_modules/yaml
 
 [generateAgents.ts]
 ../mcp/test/

@@ -6,6 +6,7 @@ node_modules/
 .DS_Store
 *.swp
 *.pyc
+DEPS.true
 /.vscode
 .mono
 .idea
@@ -20,6 +21,7 @@ nohup.out
 .trace
 .tmp
 .playwright-cli
+.playwright-mcp
 allure*
 blob-report
 playwright-report
@@ -30,6 +32,7 @@ test-results
 /packages/playwright/README.md
 /packages/playwright-test/README.md
 /packages/playwright-core/api.json
+/packages/playwright-cli
 .env
 /tests/installation/output/
 /tests/installation/.registry.json
@@ -37,3 +40,4 @@ test-results
 .eslintcache
 playwright.env
 /firefox/
+.playwright/

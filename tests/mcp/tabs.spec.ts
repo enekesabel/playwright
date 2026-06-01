@@ -61,24 +61,33 @@ test('create new tab', async ({ client }) => {
   expect(await createTab(client, 'Tab one', 'Body one')).toHaveResponse({
     tabs: `- 0: [](about:blank)
 - 1: (current) [Tab one](data:text/html,<title>Tab one</title><body>Body one</body>)`,
-    snapshot: `\`\`\`yaml
-- generic [active] [ref=e1]: Body one
-\`\`\``,
+    snapshot: `- generic [active] [ref=e1]: Body one`,
   });
 
   expect(await createTab(client, 'Tab two', 'Body two')).toHaveResponse({
     tabs: `- 0: [](about:blank)
 - 1: [Tab one](data:text/html,<title>Tab one</title><body>Body one</body>)
 - 2: (current) [Tab two](data:text/html,<title>Tab two</title><body>Body two</body>)`,
-    snapshot: `\`\`\`yaml
-- generic [active] [ref=e1]: Body two
-\`\`\``,
+    snapshot: `- generic [active] [ref=e1]: Body two`,
   });
   expect(await client.callTool({
     name: 'browser_snapshot',
     arguments: {},
   })).toHaveResponse({
     page: expect.stringContaining('Page URL: data:text/html,<title>Tab two</title><body>Body two</body>'),
+  });
+});
+
+test('create new tab with url', async ({ client }) => {
+  expect(await client.callTool({
+    name: 'browser_tabs',
+    arguments: {
+      action: 'new',
+      url: `data:text/html,<title>Tab one</title><body>Body one</body>`,
+    },
+  })).toHaveResponse({
+    result: `- 0: [](about:blank)
+- 1: (current) [Tab one](data:text/html,<title>Tab one</title><body>Body one</body>)`,
   });
 });
 

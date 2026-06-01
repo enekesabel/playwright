@@ -18,8 +18,12 @@ import type { IncomingMessage } from 'http';
 import type { ProxyServer } from '../third_party/proxy';
 import { createProxy } from '../third_party/proxy';
 import net from 'net';
-import type { SocksSocketClosedPayload, SocksSocketDataPayload, SocksSocketRequestedPayload } from 'playwright-core/src/server/utils/socksProxy';
-import { SocksProxy } from '../../packages/playwright-core/lib/server/utils/socksProxy';
+import { utils } from '../../packages/playwright-core/lib/coreBundle';
+
+type SocksSocketClosedPayload = utils.SocksSocketClosedPayload;
+type SocksSocketDataPayload = utils.SocksSocketDataPayload;
+type SocksSocketRequestedPayload = utils.SocksSocketRequestedPayload;
+const { SocksProxy } = utils;
 
 // Certain browsers perform telemetry requests which we want to ignore.
 const kConnectHostsToIgnore = new Set([
@@ -34,6 +38,7 @@ export class TestProxy {
 
   connectHosts: string[] = [];
   requestUrls: string[] = [];
+  requestHosts: string[] = [];
   wsUrls: string[] = [];
 
   private readonly _server: ProxyServer;
@@ -62,16 +67,17 @@ export class TestProxy {
     await new Promise(x => this._server.close(x));
   }
 
-  forwardTo(port: number, options?: { allowConnectRequests?: boolean, prefix?: string, preserveHostname?: boolean }) {
+  forwardTo(port: number, options?: { allowConnectRequests?: boolean, removePrefix?: string, preserveHostname?: boolean }) {
     this._prependHandler('request', (req: IncomingMessage) => {
       this.requestUrls.push(req.url);
+      this.requestHosts.push(req.headers.host);
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (options?.preserveHostname)
         url.port = '' + port;
       else
         url.host = `127.0.0.1:${port}`;
-      if (options?.prefix)
-        url.pathname = url.pathname.replace(options.prefix, '');
+      if (options?.removePrefix)
+        url.pathname = url.pathname.replace(options.removePrefix, '');
       req.url = url.toString();
     });
     this._prependHandler('connect', (req: IncomingMessage) => {
@@ -89,8 +95,8 @@ export class TestProxy {
         url.port = '' + port;
       else
         url.host = `127.0.0.1:${port}`;
-      if (options?.prefix)
-        url.pathname = url.pathname.replace(options.prefix, '');
+      if (options?.removePrefix)
+        url.pathname = url.pathname.replace(options.removePrefix, '');
       if (url.protocol === 'ws:')
         url.protocol = 'http:';
       else if (url.protocol === 'wss:')
@@ -112,6 +118,7 @@ export class TestProxy {
   reset() {
     this.connectHosts = [];
     this.requestUrls = [];
+    this.requestHosts = [];
     for (const { event, handler } of this._handlers)
       this._server.removeListener(event, handler);
     this._handlers = [];

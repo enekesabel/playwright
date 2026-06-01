@@ -124,6 +124,54 @@ test('should not retry serial mode suites with missing expectation errors', asyn
   expect(result.exitCode).toBe(1);
 });
 
+test('should respect toHaveScreenshot timeout from config', async ({ runInlineTest }, testInfo) => {
+  const infiniteAnimationURL = pathToFileURL(path.join(__dirname, '../assets/rotate-z.html'));
+  const result = await runInlineTest({
+    ...playwrightConfig({
+      expect: {
+        toHaveScreenshot: {
+          animations: 'allow',
+          timeout: 2000,
+        },
+      },
+    }),
+    'a.spec.js': `
+      const { test, expect } = require('@playwright/test');
+      test('is a test', async ({ page }) => {
+        await page.goto('${infiniteAnimationURL}');
+        await expect(page).toHaveScreenshot();
+      });
+    `
+  });
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain(`Timeout 2000ms exceeded`);
+  expect(result.output).toContain(`Expect "toHaveScreenshot" with timeout 2000ms`);
+});
+
+test('should let toHaveScreenshot call options override config timeout', async ({ runInlineTest }, testInfo) => {
+  const infiniteAnimationURL = pathToFileURL(path.join(__dirname, '../assets/rotate-z.html'));
+  const result = await runInlineTest({
+    ...playwrightConfig({
+      expect: {
+        toHaveScreenshot: {
+          animations: 'allow',
+          timeout: 30000,
+        },
+      },
+    }),
+    'a.spec.js': `
+      const { test, expect } = require('@playwright/test');
+      test('is a test', async ({ page }) => {
+        await page.goto('${infiniteAnimationURL}');
+        await expect(page).toHaveScreenshot({ timeout: 2000 });
+      });
+    `
+  });
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain(`Timeout 2000ms exceeded`);
+  expect(result.output).toContain(`Expect "toHaveScreenshot" with timeout 2000ms`);
+});
+
 test.describe('expect config animations option', () => {
   test('disabled', async ({ runInlineTest }, testInfo) => {
     const cssTransitionURL = pathToFileURL(path.join(__dirname, '../assets/css-transition.html'));
@@ -1583,4 +1631,21 @@ test.describe('update-snapshots', () => {
     expect(comparePNGs(newBaseline, whiteImage)).toBe(null);
     expect(comparePNGs(newBaseline, EXPECTED_SNAPSHOT)).not.toBe(null);
   });
+});
+
+test('should hide overlays during toHaveScreenshot', async ({ runInlineTest }, testInfo) => {
+  const result = await runInlineTest({
+    ...playwrightConfig({
+      snapshotPathTemplate: '__screenshots__/{testFilePath}/{arg}{ext}',
+    }),
+    '__screenshots__/a.spec.js/snapshot.png': whiteImage,
+    'a.spec.js': `
+      const { test, expect } = require('@playwright/test');
+      test('is a test', async ({ page }) => {
+        await page.screencast.showOverlay('<div style="position:absolute;inset:0;background:red"></div>');
+        await expect(page).toHaveScreenshot('snapshot.png');
+      });
+    `
+  });
+  expect(result.exitCode).toBe(0);
 });

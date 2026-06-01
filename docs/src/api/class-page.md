@@ -559,6 +559,7 @@ page.
 
 ## async method: Page.addInitScript
 * since: v1.8
+- returns: <[Disposable]>
 
 Adds a script which would be evaluated in one of the following scenarios:
 * Whenever the page is navigated.
@@ -709,58 +710,16 @@ current working directory.
 
 Raw CSS content to be injected into frame.
 
-## async method: Page.agent
-* since: v1.58
-* langs: js
-- returns: <[PageAgent]>
-
-Initialize page agent with the llm provider and cache.
-
-### option: Page.agent.cache
-* since: v1.58
-- `cache` <[Object]>
-  - `cacheFile` ?<[string]> Cache file to use/generate code for performed actions into. Cache is not used if not specified (default).
-  - `cacheOutFile` ?<[string]> When specified, generated entries are written into the `cacheOutFile` instead of updating the `cacheFile`.
-
-### option: Page.agent.expect
-* since: v1.58
-- `expect` <[Object]>
-  - `timeout` ?<[int]> Default timeout for expect calls in milliseconds, defaults to 5000ms.
-
-### option: Page.agent.limits
-* since: v1.58
-- `limits` <[Object]>
-  - `maxTokens` ?<[int]> Maximum number of tokens to consume. The agentic loop will stop after input + output tokens exceed this value. Defaults to unlimited.
-  - `maxActions` ?<[int]> Maximum number of agentic actions to generate, defaults to 10.
-  - `maxActionRetries` ?<[int]> Maximum number retries per action, defaults to 3.
-
-Limits to use for the agentic loop.
-
-### option: Page.agent.provider
-* since: v1.58
-- `provider` <[Object]>
-  - `api` <[PageAgentAPI]<"openai"|"openai-compatible"|"anthropic"|"google">> API to use.
-  - `apiEndpoint` ?<[string]> Endpoint to use if different from default.
-  - `apiKey` <[string]> API key for the LLM provider.
-  - `apiTimeout` ?<[int]> Amount of time to wait for the provider to respond to each request.
-  - `model` <[string]> Model identifier within the provider. Required in non-cache mode.
-
-### option: Page.agent.secrets
-* since: v1.58
-- `secrets` ?<[Object]<[string], [string]>>
-
-Secrets to hide from the LLM.
-
-### option: Page.agent.systemPrompt
-* since: v1.58
-- `systemPrompt` <[string]>
-
-System prompt for the agent's loop.
-
 ## async method: Page.bringToFront
 * since: v1.8
 
 Brings page to front (activates tab).
+
+## async method: Page.cancelPickLocator
+* since: v1.59
+
+Cancels an ongoing [`method: Page.pickLocator`] call by deactivating pick locator mode.
+If no pick locator mode is active, this method is a no-op.
 
 ## async method: Page.check
 * since: v1.8
@@ -1563,7 +1522,7 @@ Console.WriteLine(await page.EvaluateAsync<int>("1 + 2")); // prints "3"
 [ElementHandle] instances can be passed as an argument to the [`method: Page.evaluate`]:
 
 ```js
-const bodyHandle = await page.evaluate('document.body');
+const bodyHandle = await page.evaluateHandle('document.body');
 const html = await page.evaluate<string, HTMLElement>(([body, suffix]) =>
   body.innerHTML + suffix, [bodyHandle, 'hello']
 );
@@ -1571,25 +1530,25 @@ await bodyHandle.dispose();
 ```
 
 ```java
-ElementHandle bodyHandle = page.evaluate("document.body");
+ElementHandle bodyHandle = page.evaluateHandle("document.body");
 String html = (String) page.evaluate("([body, suffix]) => body.innerHTML + suffix", Arrays.asList(bodyHandle, "hello"));
 bodyHandle.dispose();
 ```
 
 ```python async
-body_handle = await page.evaluate("document.body")
+body_handle = await page.evaluate_handle("document.body")
 html = await page.evaluate("([body, suffix]) => body.innerHTML + suffix", [body_handle, "hello"])
 await body_handle.dispose()
 ```
 
 ```python sync
-body_handle = page.evaluate("document.body")
+body_handle = page.evaluate_handle("document.body")
 html = page.evaluate("([body, suffix]) => body.innerHTML + suffix", [body_handle, "hello"])
 body_handle.dispose()
 ```
 
 ```csharp
-var bodyHandle = await page.EvaluateAsync("document.body");
+var bodyHandle = await page.EvaluateHandleAsync("document.body");
 var html = await page.EvaluateAsync<string>("([body, suffix]) => body.innerHTML + suffix", new object [] { bodyHandle, "hello" });
 await bodyHandle.DisposeAsync();
 ```
@@ -1717,6 +1676,7 @@ Optional argument to pass to [`param: expression`].
 
 ## async method: Page.exposeBinding
 * since: v1.8
+- returns: <[Disposable]>
 
 The method adds a function called [`param: name`] on the `window` object of every frame in this page. When called, the
 function executes [`param: callback`] and returns a [Promise] which resolves to the return value of [`param: callback`].
@@ -1869,19 +1829,13 @@ Name of the function on the window object.
 ### param: Page.exposeBinding.callback
 * since: v1.8
 - `callback` <[function]>
+  * alias: BindingCallback
 
 Callback function that will be called in the Playwright's context.
 
-### option: Page.exposeBinding.handle
-* since: v1.8
-* deprecated: This option will be removed in the future.
-- `handle` <[boolean]>
-
-Whether to pass the argument as a handle, instead of passing by value. When passing a handle, only one argument is
-supported. When passing by value, multiple arguments are supported.
-
 ## async method: Page.exposeFunction
 * since: v1.8
+- returns: <[Disposable]>
 
 The method adds a function called [`param: name`] on the `window` object of every frame in the page. When called, the
 function executes [`param: callback`] and returns a [Promise] which resolves to the return value of [`param: callback`].
@@ -2069,6 +2023,7 @@ Name of the function on the window object
 ### param: Page.exposeFunction.callback
 * since: v1.8
 - `callback` <[function]>
+  * alias: FunctionCallback
 
 Callback function which will be called in Playwright's context.
 
@@ -2325,6 +2280,8 @@ Attribute name to get the value for.
 
 ### option: Page.getByRole.exact = %%-locator-get-by-role-option-exact-%%
 
+### option: Page.getByRole.description = %%-locator-get-by-role-option-description-%%
+
 ## method: Page.getByTestId
 * since: v1.27
 - returns: <[Locator]>
@@ -2495,6 +2452,11 @@ it gets merged via the [`new URL()`](https://developer.mozilla.org/en-US/docs/We
 
 Referer header value. If provided it will take preference over the referer header value set by
 [`method: Page.setExtraHTTPHeaders`].
+
+## async method: Page.hideHighlight
+* since: v1.60
+
+Hide all locator highlight overlays previously added by [`method: Locator.highlight`] on this page.
 
 ## async method: Page.hover
 * since: v1.8
@@ -2732,11 +2694,41 @@ Clears all stored console messages from this page. Subsequent calls to [`method:
 
 Clears all stored page errors from this page. Subsequent calls to [`method: Page.pageErrors`] will only return errors thrown after the clear.
 
+## property: Page.localStorage
+* since: v1.61
+- type: <[WebStorage]>
+
+Provides access to the page's `localStorage` for the current origin. See [WebStorage].
+
+```js
+await page.localStorage.setItem('token', 'abc');
+const token = await page.localStorage.getItem('token');
+```
+
+## property: Page.sessionStorage
+* since: v1.61
+- type: <[WebStorage]>
+
+Provides access to the page's `sessionStorage` for the current origin. See [WebStorage].
+
+```js
+await page.sessionStorage.setItem('flag', '1');
+const flag = await page.sessionStorage.getItem('flag');
+```
+
 ## async method: Page.consoleMessages
 * since: v1.56
 - returns: <[Array]<[ConsoleMessage]>>
 
 Returns up to (currently) 200 last console messages from this page. See [`event: Page.console`] for more details.
+
+### option: Page.consoleMessages.filter
+* since: v1.59
+- `filter` <[ConsoleMessagesFilter]<"all"|"since-navigation">>
+
+Controls which messages are returned:
+- `'since-navigation'` (default) — returns only messages logged after the last committed main-frame navigation.
+- `'all'` — returns all stored console messages.
 
 
 ## async method: Page.pageErrors
@@ -2752,6 +2744,14 @@ Returns up to (currently) 200 last page errors from this page. See [`event: Page
 - returns: <[Array]<[string]>>
 
 Returns up to (currently) 200 last page errors from this page. See [`event: Page.pageError`] for more details.
+
+### option: Page.pageErrors.filter
+* since: v1.59
+- `filter` <[PageErrorsFilter]<"all"|"since-navigation">>
+
+Controls which errors are returned:
+- `'since-navigation'` (default) — returns only errors thrown after the last committed main-frame navigation.
+- `'all'` — returns all stored page errors.
 
 
 ## method: Page.locator
@@ -3028,6 +3028,7 @@ Paper margins, defaults to none.
 * since: v1.8
 * langs: csharp, java
 - `margin` <[Object]>
+  * alias-java: Margin
   - `top` ?<[string]> Top margin, accepts values labeled with units. Defaults to `0`.
   - `right` ?<[string]> Right margin, accepts values labeled with units. Defaults to `0`.
   - `bottom` ?<[string]> Bottom margin, accepts values labeled with units. Defaults to `0`.
@@ -3055,6 +3056,39 @@ Whether or not to generate tagged (accessible) PDF. Defaults to `false`.
 
 Whether or not to embed the document outline into the PDF. Defaults to `false`.
 
+## async method: Page.pickLocator
+* since: v1.59
+- returns: <[Locator]>
+
+Enters pick locator mode where hovering over page elements highlights them and shows the corresponding locator.
+Once the user clicks an element, the mode is deactivated and the [Locator] for the picked element is returned.
+
+**Usage**
+
+```js
+const locator = await page.pickLocator();
+console.log(locator);
+```
+
+```java
+Locator locator = page.pickLocator();
+System.out.println(locator);
+```
+
+```python async
+locator = await page.pick_locator()
+print(locator)
+```
+
+```python sync
+locator = page.pick_locator()
+print(locator)
+```
+
+```csharp
+var locator = await page.PickLocatorAsync();
+Console.WriteLine(locator);
+```
 
 ## async method: Page.press
 * since: v1.8
@@ -3544,6 +3578,7 @@ API testing helper associated with this page. This method returns the same insta
 
 ## async method: Page.route
 * since: v1.8
+- returns: <[Disposable]>
 
 Routing provides the capability to modify network requests that are made by a page.
 
@@ -3861,6 +3896,24 @@ Handler function to route the WebSocket.
 - `handler` <[function]\([WebSocketRoute]\)>
 
 Handler function to route the WebSocket.
+
+
+## property: Page.screencast
+* since: v1.59
+- type: <[Screencast]>
+
+[Screencast] object associated with this page.
+
+**Usage**
+
+```js
+page.screencast.on('screencastFrame', data => {
+  console.log('received frame, jpeg size:', data.length);
+});
+await page.screencast.start();
+// ... perform actions ...
+await page.screencast.stop();
+```
 
 
 ## async method: Page.screenshot
@@ -4198,6 +4251,38 @@ Page width in pixels.
 
 Page height in pixels.
 
+## async method: Page.ariaSnapshot
+* since: v1.59
+- returns: <[string]>
+
+Captures the aria snapshot of the page. Read more about [aria snapshots](../aria-snapshots.md).
+
+### option: Page.ariaSnapshot.mode
+* since: v1.59
+- `mode` <[AriaSnapshotMode]<"ai"|"default">>
+
+When set to `"ai"`, returns a snapshot optimized for AI consumption: including element references like `[ref=e2]` and snapshots of `<iframe>`s. Defaults to `"default"`.
+
+### option: Page.ariaSnapshot.timeout = %%-input-timeout-%%
+* since: v1.59
+
+### option: Page.ariaSnapshot.timeout = %%-input-timeout-js-%%
+* since: v1.59
+
+### option: Page.ariaSnapshot.depth
+* since: v1.59
+- `depth` <[int]>
+
+When specified, limits the depth of the snapshot.
+
+### option: Page.ariaSnapshot.boxes
+* since: v1.60
+- `boxes` <[boolean]>
+
+When `true`, appends each element's bounding box as `[box=x,y,width,height]` to the snapshot. Coordinates are
+relative to the viewport, in CSS pixels, as returned by [`Element.getBoundingClientRect()`](https://developer.mozilla.org/en-US/docs/Web/API/Element/getBoundingClientRect).
+Defaults to `false`.
+
 ## async method: Page.tap
 * since: v1.8
 * discouraged: Use locator-based [`method: Locator.tap`] instead. Read more about [locators](../locators.md).
@@ -4214,7 +4299,7 @@ When all steps combined have not finished during the specified [`option: timeout
 [TimeoutError]. Passing zero timeout disables this.
 
 :::note
-[`method: Page.tap`] the method will throw if [`option: Browser.newContext.hasTouch`] option of the browser context is false.
+[`method: Page.tap`] will throw if the [`option: Browser.newContext.hasTouch`] option of the browser context is false.
 :::
 
 ### param: Page.tap.selector = %%-input-selector-%%
@@ -4401,14 +4486,15 @@ Optional handler function to route the request.
 
 ## method: Page.video
 * since: v1.8
-- returns: <[Video]>
+- returns: <[null]|[Video]>
 
-Video object associated with this page. Can be used to control video recording with [`method: Video.start`]
-and [`method: Video.stop`], or to access the video file when using the `recordVideo` context option.
+Video object associated with this page. Can be used to access the video file when using the `recordVideo` context option.
 
 ## method: Page.viewportSize
 * since: v1.8
 - returns: <[null]|[Object]>
+  * alias: ViewportSize
+  * alias-csharp: PageViewportSizeResult
   - `width` <[int]> page width in pixels.
   - `height` <[int]> page height in pixels.
 

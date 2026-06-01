@@ -95,9 +95,9 @@ This method attaches Playwright to an existing browser instance created via `Bro
 The major and minor version of the Playwright instance that connects needs to match the version of Playwright that launches the browser (1.2.3 → is compatible with 1.2.x).
 :::
 
-### param: BrowserType.connect.wsEndpoint
+### param: BrowserType.connect.endpoint
 * since: v1.10
-- `wsEndpoint` <[string]>
+- `endpoint` <[string]>
 
 A Playwright browser websocket endpoint to connect to. You obtain this endpoint via `BrowserServer.wsEndpoint`.
 
@@ -113,14 +113,6 @@ Additional HTTP headers to be sent with web socket connect request. Optional.
 
 Slows down Playwright operations by the specified amount of milliseconds. Useful so that you
 can see what is going on. Defaults to 0.
-
-### option: BrowserType.connect.logger
-* since: v1.14
-* langs: js
-* deprecated: The logs received by the logger are incomplete. Please use tracing instead.
-- `logger` <[Logger]>
-
-Logger sink for Playwright logging. Optional.
 
 ### option: BrowserType.connect.timeout
 * since: v1.10
@@ -218,14 +210,6 @@ Additional HTTP headers to be sent with connect request. Optional.
 Tells Playwright that it runs on the same host as the CDP server. It will enable certain optimizations that rely upon
 the file system being the same between Playwright and the Browser.
 
-### option: BrowserType.connectOverCDP.logger
-* since: v1.14
-* langs: js
-* deprecated: The logs received by the logger are incomplete. Please use tracing instead.
-- `logger` <[Logger]>
-
-Logger sink for Playwright logging. Optional.
-
 ### option: BrowserType.connectOverCDP.slowMo
 * since: v1.11
 - `slowMo` <[float]>
@@ -239,6 +223,25 @@ can see what is going on. Defaults to 0.
 
 Maximum time in milliseconds to wait for the connection to be established. Defaults to
 `30000` (30 seconds). Pass `0` to disable timeout.
+
+### option: BrowserType.connectOverCDP.noDefaults
+* since: v1.60
+- `noDefaults` <[boolean]>
+
+When true, Playwright will not apply its default overrides to the existing default browser context.
+Specifically, [`option: Browser.newContext.acceptDownloads`] is left at the browser's setting, focus
+emulation is not enabled, and media emulation options (such as [`option: Browser.newContext.colorScheme`],
+[`option: Browser.newContext.reducedMotion`], [`option: Browser.newContext.forcedColors`], and
+[`option: Browser.newContext.contrast`]) are not applied. Useful when attaching to a user's daily-driver
+browser where these overrides would interfere with existing browser state. New contexts created via
+[`method: Browser.newContext`] are not affected. Defaults to `false`.
+
+### option: BrowserType.connectOverCDP.artifactsDir
+* since: v1.61
+- `artifactsDir` <[path]>
+
+If specified, browser artifacts (such as traces and downloads) are saved into this directory.
+
 
 ## method: BrowserType.executablePath
 * since: v1.8
@@ -409,7 +412,7 @@ const { chromium } = require('playwright');  // Or 'webkit' or 'firefox'.
 * since: v1.45
 - `host` <[string]>
 
-Host to use for the web socket. It is optional and if it is omitted, the server will accept connections on the unspecified IPv6 address (::) when IPv6 is available, or the unspecified IPv4 address (0.0.0.0) otherwise. Consider hardening it with picking a specific interface.
+Host to use for the web socket. It is optional and defaults to `localhost`, accepting connections only from the loopback interface. Pass an explicit address (e.g. `0.0.0.0`) to accept connections from the network — be aware this exposes the browser RPC to anything that can reach the listening port.
 
 ### option: BrowserType.launchServer.port
 * since: v1.8

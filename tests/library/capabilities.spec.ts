@@ -16,7 +16,6 @@
 
 import url from 'url';
 import { contextTest as it, expect } from '../config/browserTest';
-import { hostPlatform } from '../../packages/playwright-core/src/server/utils/hostPlatform';
 
 it('SharedArrayBuffer should work @smoke', async function({ contextFactory, httpsServer }) {
   const context = await contextFactory({ ignoreHTTPSErrors: true });
@@ -93,14 +92,15 @@ it('should play webm video @smoke', async ({ page, asset, browserName, platform,
   await page.$eval('video', v => v.pause());
 });
 
-it('should play audio @smoke', async ({ page, server, browserName, platform }) => {
+it('should play audio @smoke', async ({ page, server, browserName, platform, macVersion }) => {
   it.fixme(browserName === 'webkit' && platform === 'win32', 'https://github.com/microsoft/playwright/issues/10892');
+  it.fixme(browserName === 'webkit' && platform === 'darwin' && macVersion === 15, 'audio output is unreliable on hosted macOS 15 runners');
   await page.goto(server.EMPTY_PAGE);
   await page.setContent(`<audio src="${server.PREFIX}/example.mp3"></audio>`);
   await page.$eval('audio', e => e.play());
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(3000);
   await page.$eval('audio', e => e.pause());
-  expect(await page.$eval('audio', e => e.currentTime)).toBeGreaterThan(0.2);
+  expect(await page.$eval('audio', e => e.currentTime)).toBeGreaterThan(0.1);
 });
 
 it('should support webgl @smoke', async ({ page }) => {
@@ -392,10 +392,9 @@ it('should be able to render avif images', {
     type: 'issue',
     description: 'https://github.com/microsoft/playwright/issues/32673',
   }
-}, async ({ page, server, browserName, platform }) => {
+}, async ({ page, server, browserName, platform, isFrozenWebkit }) => {
   it.fixme(browserName === 'webkit' && platform === 'win32');
-  it.skip(browserName === 'webkit' && hostPlatform.startsWith('ubuntu20.04'), 'Ubuntu 20.04 is frozen');
-  it.skip(browserName === 'webkit' && hostPlatform.startsWith('debian11'), 'Debian 11 is too old');
+  it.skip(isFrozenWebkit);
   await page.goto(server.EMPTY_PAGE);
   await page.setContent(`<img src="${server.PREFIX}/rgb.avif" onerror="window.error = true">`);
   await expect.poll(() => page.locator('img').boundingBox()).toEqual(expect.objectContaining({

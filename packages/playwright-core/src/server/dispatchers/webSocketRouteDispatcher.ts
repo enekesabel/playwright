@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
+import { deserializeURLMatch, urlMatches } from '@isomorphic/urlMatch';
+import { eventsHelper } from '@utils/eventsHelper';
 import { Page } from '../page';
 import { Dispatcher } from './dispatcher';
 import { PageDispatcher } from './pageDispatcher';
 import * as rawWebSocketMockSource from '../../generated/webSocketMockSource';
 import { SdkObject } from '../instrumentation';
-import { deserializeURLMatch, urlMatches } from '../../utils/isomorphic/urlMatch';
-import { eventsHelper } from '../utils/eventsHelper';
 
 import type { BrowserContextDispatcher } from './browserContextDispatcher';
 import type { BrowserContext } from '../browserContext';
@@ -37,8 +37,8 @@ export class WebSocketRouteDispatcher extends Dispatcher<SdkObject, channels.Web
   private _frame: Frame;
   private static _idToDispatcher = new Map<string, WebSocketRouteDispatcher>();
 
-  constructor(scope: PageDispatcher | BrowserContextDispatcher, id: string, url: string, frame: Frame) {
-    super(scope, new SdkObject(scope._object, 'webSocketRoute'), 'WebSocketRoute', { url });
+  constructor(scope: PageDispatcher | BrowserContextDispatcher, id: string, url: string, protocols: string[], frame: Frame) {
+    super(scope, new SdkObject(scope._object, 'webSocketRoute'), 'WebSocketRoute', { url, protocols });
     this._id = id;
     this._frame = frame;
     this._eventListeners.push(
@@ -66,7 +66,7 @@ export class WebSocketRouteDispatcher extends Dispatcher<SdkObject, channels.Web
       throw new Error('Another client is already routing WebSockets');
     if (!data) {
       data = { counter: 0, connection, binding: null as any };
-      data.binding = await context.exposeBinding(progress, kBindingName, false, (source, payload: ws.BindingPayload) => {
+      data.binding = await context.exposeBinding(progress, kBindingName, (source, payload: ws.BindingPayload) => {
         if (payload.type === 'onCreate') {
           const contextDispatcher = connection.existingDispatcher<BrowserContextDispatcher>(context);
           const pageDispatcher = contextDispatcher ? PageDispatcher.fromNullable(contextDispatcher, source.page) : undefined;
@@ -76,10 +76,10 @@ export class WebSocketRouteDispatcher extends Dispatcher<SdkObject, channels.Web
           else if (contextDispatcher && matchesPattern(contextDispatcher, context._options.baseURL, payload.url))
             scope = contextDispatcher;
           if (scope) {
-            new WebSocketRouteDispatcher(scope, payload.id, payload.url, source.frame);
+            new WebSocketRouteDispatcher(scope, payload.id, payload.url, payload.protocols, source.frame);
           } else {
             const request: ws.PassthroughRequest = { id: payload.id, type: 'passthrough' };
-            source.frame.evaluateExpression(`globalThis.__pwWebSocketDispatch(${JSON.stringify(request)})`).catch(() => {});
+            source.frame.evaluateExpression(progress, `globalThis.__pwWebSocketDispatch(${JSON.stringify(request)})`).catch(() => {});
           }
           return;
         }
@@ -112,8 +112,8 @@ export class WebSocketRouteDispatcher extends Dispatcher<SdkObject, channels.Web
     if (!data || data.connection !== connection)
       return;
     if (--data.counter <= 0)
-      await context.removeExposedBindings([data.binding]);
-    await target.removeInitScripts([initScript]);
+      await data.binding.dispose();
+    await initScript.dispose();
   }
 
   async connect(params: channels.WebSocketRouteConnectParams, progress: Progress) {
@@ -141,7 +141,7 @@ export class WebSocketRouteDispatcher extends Dispatcher<SdkObject, channels.Web
   }
 
   private async _evaluateAPIRequest(progress: Progress, request: ws.APIRequest) {
-    await progress.race(this._frame.evaluateExpression(`globalThis.__pwWebSocketDispatch(${JSON.stringify(request)})`).catch(() => {}));
+    await this._frame.evaluateExpression(progress, `globalThis.__pwWebSocketDispatch(${JSON.stringify(request)})`).catch(() => {});
   }
 
   override _onDispose() {
