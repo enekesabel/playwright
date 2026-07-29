@@ -45,6 +45,7 @@ export function frameSnapshotStreamer(snapshotStreamer: string, removeNoScript: 
   const kScrollLeftAttribute = '__playwright_scroll_left_';
   const kStyleSheetAttribute = '__playwright_style_sheet_';
   const kTargetAttribute = '__playwright_target__';
+  const kAriaRefAttribute = '__playwright_aria_ref__';
   const kCustomElementsAttribute = '__playwright_custom_elements__';
   const kCurrentSrcAttribute = '__playwright_current_src__';
   const kBoundingRectAttribute = '__playwright_bounding_rect__';
@@ -523,6 +524,13 @@ export function frameSnapshotStreamer(snapshotStreamer: string, removeNoScript: 
           if ((element as any).__playwright_target__ === this._targetGeneration) {
             expectValue(kTargetAttribute);
             attrs[kTargetAttribute] = '';
+          }
+          const ariaRef = (element as any)._ariaRef;
+          const ariaRefValue = ariaRef && typeof ariaRef.ref === 'string' ? ariaRef.ref : undefined;
+          if (ariaRefValue !== undefined) {
+            expectValue(kAriaRefAttribute);
+            expectValue(ariaRefValue);
+            attrs[kAriaRefAttribute] = ariaRefValue;
           }
         }
 
