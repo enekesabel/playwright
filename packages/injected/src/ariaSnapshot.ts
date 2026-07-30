@@ -82,7 +82,7 @@ function toInternalOptions(options: AriaTreeOptions): InternalOptions {
   return { visibility: 'aria', refs: 'none', renderBoxes };
 }
 
-export function generateAriaTree(rootElement: Element, publicOptions: AriaTreeOptions): AriaSnapshot {
+export function generateAriaTree(rootElement: Element, publicOptions: AriaTreeOptions, beforeDistill?: (snapshot: AriaSnapshot) => void): AriaSnapshot {
   const options = toInternalOptions(publicOptions);
   const visited = new Set<Node>();
   // For each node, the elements that contributed to its accessible name.
@@ -215,6 +215,7 @@ export function generateAriaTree(rootElement: Element, publicOptions: AriaTreeOp
     roleUtils.endAriaCaches();
   }
 
+  beforeDistill?.(snapshot);
   distillAriaSnapshot(snapshot, publicOptions);
   return snapshot;
 }

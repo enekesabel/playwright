@@ -318,14 +318,22 @@ export class InjectedScript {
     return this.ariaSnapshotWithRefs(node, options).text;
   }
 
-  ariaSnapshotWithRefs(node: Node, options: AriaTreeOptions & { depth?: number }): { text: string, iframeRefs: string[], iframeDepths: Record<string, number> } {
+  ariaSnapshotWithRefs(node: Node, options: AriaTreeOptions & { depth?: number, __aymeCaptureUndistilled?: boolean }): { text: string, iframeRefs: string[], iframeDepths: Record<string, number>, __ayme?: { undistilledText: string } } {
     if (node.nodeType !== Node.ELEMENT_NODE)
       throw this.createStacklessError('Can only capture aria snapshot of Element nodes.');
     options = { ...options, refPrefix: this._frameSeq && options.mode === 'ai' ? 'f' + this._frameSeq : '' };
-    const ariaSnapshot = generateAriaTree(node as Element, options);
+    let undistilledText: string | undefined;
+    const ariaSnapshot = generateAriaTree(node as Element, options, options.mode === 'ai' && options.__aymeCaptureUndistilled ? snapshot => {
+      undistilledText = renderAriaTree(snapshot, options).text;
+    } : undefined);
     const rendered = renderAriaTree(ariaSnapshot, options);
     this._lastAriaSnapshotForQuery = ariaSnapshot;
-    return { text: rendered.text, iframeRefs: ariaSnapshot.iframeRefs, iframeDepths: rendered.iframeDepths };
+    return {
+      text: rendered.text,
+      iframeRefs: ariaSnapshot.iframeRefs,
+      iframeDepths: rendered.iframeDepths,
+      ...(undistilledText === undefined ? {} : { __ayme: { undistilledText } }),
+    };
   }
 
   ariaSnapshotForRecorder(): { ariaSnapshot: string, refs: Map<Element, string> } {

@@ -482,6 +482,31 @@ it('should resolve refs of distilled-away nodes', async ({ page }) => {
   await expect(page.locator('aria-ref=e3')).toHaveText('[Feature] a dedicated clipboard API');
 });
 
+it('should return the undistilled snapshot through the Ayme extension', async ({ page, toImpl }) => {
+  await page.setContent(`
+    <a style="cursor: pointer" href="/issues/15860"><div>[Feature] a dedicated clipboard API</div></a>
+  `);
+
+  const mainContext = await toImpl(page).mainFrame().mainContext();
+  const injected = await mainContext.injectedScript();
+  const ordinarySnapshot = await injected.evaluate((injected: {
+    document: Document;
+    ariaSnapshotWithRefs: (node: Node, options: { mode: 'ai', __aymeCaptureUndistilled?: boolean }) => { text: string, __ayme?: { undistilledText: string } };
+  }) => injected.ariaSnapshotWithRefs(injected.document.body, { mode: 'ai' }));
+  expect(ordinarySnapshot.__ayme).toBeUndefined();
+
+  const snapshot = await injected.evaluate((injected: {
+    document: Document;
+    ariaSnapshotWithRefs: (node: Node, options: { mode: 'ai', __aymeCaptureUndistilled?: boolean }) => { text: string, __ayme?: { undistilledText: string } };
+  }) => injected.ariaSnapshotWithRefs(injected.document.body, { mode: 'ai', __aymeCaptureUndistilled: true }));
+
+  expect(snapshot.text).toBe(await snapshotForAI(page));
+  expect(snapshot.text).not.toContain('[ref=e3]');
+  expect(snapshot.__ayme?.undistilledText).toContain('[ref=e3]');
+  const linkRef = snapshot.text.match(/link "\[Feature\] a dedicated clipboard API" \[ref=(e\d+)\]/)![1];
+  expect(snapshot.__ayme?.undistilledText).toContain(`link "[Feature] a dedicated clipboard API" [ref=${linkRef}]`);
+});
+
 it('should not distill snapshots outside of ai mode', async ({ page }) => {
   await page.setContent(`
     <h3><a href="/issues/1">Clipboard API</a></h3>
