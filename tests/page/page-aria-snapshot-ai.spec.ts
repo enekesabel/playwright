@@ -335,6 +335,19 @@ it('should preserve ref-bearing generic-only subtrees', async ({ page }) => {
   `));
 });
 
+it('should preserve a text-bearing generic link ref', async ({ page }) => {
+  await page.setContent(`
+    <div class="shopping_cart_container">
+      <a class="shopping_cart_link" data-test="shopping-cart-link"><span>1</span></a>
+    </div>
+  `);
+
+  const snapshot = await snapshotForAI(page);
+  expect(snapshot).toContainYaml(`
+    - generic [ref=e3]: "1"
+  `);
+});
+
 it('should unwrap ref-bearing generic wrappers around meaningful nodes', async ({ page }) => {
   await page.setContent(`
     <div>

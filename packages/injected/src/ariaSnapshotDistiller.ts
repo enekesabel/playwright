@@ -221,13 +221,17 @@ const removeNameRepeatingChild: DistillerPlugin = {
 // bottom-up, and after the other plugins already removed or unwrapped the children.
 const inlineTextIntoGeneric: DistillerPlugin = {
   name: 'inlineTextIntoGeneric',
-  exit(node: aria.AriaNode) {
+  exit(node: aria.AriaNode, ctx: DistillerContext) {
     if (node.role !== 'generic' || Object.keys(node.props).length || node.children.length !== 1)
       return;
     const child = node.children[0];
     if (typeof child === 'string')
       return;
     if (child.role !== 'generic' || child.name || child.active || Object.keys(child.props).length)
+      return;
+    // The recorder retargets descendant clicks to an <a> even when it has no href (and therefore a
+    // generic ARIA role), so keep that element's ref available for action-to-snapshot correlation.
+    if (child.ref && ctx.snapshot.info.get(child.ref)?.element.nodeName === 'A')
       return;
     if (child.children.length === 1 && typeof child.children[0] === 'string')
       node.children = [child.children[0]];
