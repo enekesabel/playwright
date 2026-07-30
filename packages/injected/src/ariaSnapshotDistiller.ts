@@ -134,14 +134,20 @@ const mergeStringChildren: DistillerPlugin = {
   },
 };
 
+function isGenericOnlySubtree(node: aria.AriaNode): boolean {
+  return node.role === 'generic' && !node.name && node.children.every(child => typeof child === 'string' ? !normalizeWhiteSpace(child) : isGenericOnlySubtree(child));
+}
+
 // Only unwrap a generic that encloses at most one element, logical grouping still makes sense,
 // even if it is not ref-able. The decision is made on `exit` - whether the node encloses a single
 // ref-bearing child is only known after its own descendants were unwrapped - so nested wrappers
 // collapse bottom-up.
 const unwrapSingleChildGenerics: DistillerPlugin = {
   name: 'unwrapSingleChildGenerics',
-  exit(node: aria.AriaNode): 'unwrap' | void {
-    if (node.role === 'generic' && !node.name && node.children.length <= 1 && node.children.every(child => typeof child !== 'string' && !!child.ref))
+  exit(node: aria.AriaNode, ctx: DistillerContext): 'unwrap' | void {
+    const parent = ctx.ancestors[ctx.ancestors.length - 1];
+    const preserveGenericOnlySubtree = !!node.ref && isGenericOnlySubtree(node) && (!!node.children.length || !!parent && isGenericOnlySubtree(parent));
+    if (node.role === 'generic' && !node.name && node.children.length <= 1 && node.children.every(child => typeof child !== 'string' && !!child.ref) && !preserveGenericOnlySubtree)
       return 'unwrap';
   },
 };

@@ -320,6 +320,34 @@ it('should collapse generic nodes', async ({ page }) => {
   `);
 });
 
+it('should preserve ref-bearing generic-only subtrees', async ({ page }) => {
+  await page.setContent(`
+    <div class="shopping_cart_container">
+      <a class="shopping_cart_link" data-test="shopping-cart-link" style="display: block; width: 20px; height: 20px"></a>
+    </div>
+  `);
+
+  const snapshot = await snapshotForAI(page);
+  expect(snapshot).toEqual(unshift(`
+    - generic [active] [ref=e1]:
+      - generic [ref=e2]:
+        - generic [ref=e3]
+  `));
+});
+
+it('should unwrap ref-bearing generic wrappers around meaningful nodes', async ({ page }) => {
+  await page.setContent(`
+    <div>
+      <button>Button</button>
+    </div>
+  `);
+
+  const snapshot = await snapshotForAI(page);
+  expect(snapshot).toEqual(unshift(`
+    - button "Button" [ref=e3]
+  `));
+});
+
 it('should include cursor pointer hint', async ({ page }) => {
   await page.setContent(`
     <button style="cursor: pointer">Button</button>
