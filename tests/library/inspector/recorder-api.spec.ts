@@ -69,6 +69,24 @@ test('should click', async ({ context, browserName, platform, channel }) => {
   expect(normalizeCode(clickActions[0].code)).toEqual(`await page.getByRole('button', { name: 'Submit' }).click();`);
 });
 
+test('should use the ref of the selector-retargeted interactive parent', async ({ context }) => {
+  const log = await startRecording(context);
+  const page = await context.newPage();
+  await page.setContent(`<a href="#cart" data-testid="cart"><span>1</span></a>`);
+  await page.getByTestId('cart').click();
+
+  const clickActions = log.action('click');
+  expect(clickActions).toEqual([
+    expect.objectContaining({
+      action: expect.objectContaining({
+        name: 'click',
+        selector: 'internal:testid=[data-testid="cart"s]',
+        ref: 'e2',
+      }),
+    })
+  ]);
+});
+
 test('should double click', async ({ context, browserName, platform, channel }) => {
   const log = await startRecording(context);
   const page = await context.newPage();

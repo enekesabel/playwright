@@ -937,8 +937,8 @@ class JsonRecordActionTool implements RecorderTool {
   private _ariaSnapshot(element: HTMLElement): { ariaSnapshot: string, selector: string, ref?: string };
   private _ariaSnapshot(element: HTMLElement | undefined): { ariaSnapshot: string, selector?: string, ref?: string } {
     const { ariaSnapshot, refs } = this._recorder.injectedScript.ariaSnapshotForRecorder();
-    const ref = element ? refs.get(element) : undefined;
     const elementInfo = element ? this._recorder.injectedScript.generateSelector(element, { testIdAttributeName: this._recorder.state.testIdAttributeName }) : undefined;
+    const ref = element ? refs.get(element) ?? (elementInfo?.elements.length === 1 ? refs.get(elementInfo.elements[0]) : undefined) : undefined;
     return { ariaSnapshot, selector: elementInfo?.selector, ref };
   }
 }
