@@ -860,6 +860,8 @@ scheme.BrowserContextEnableRecorderParams = tObject({
   language: tOptional(tString),
   mode: tOptional(tEnum(['inspecting', 'recording'])),
   recorderMode: tOptional(tEnum(['default', 'api'])),
+  toolbar: tOptional(tEnum(['playwright', 'ayme-v1', 'hidden'])),
+  toolbarTheme: tOptional(tEnum(['light', 'dark'])),
   pauseOnNextStatement: tOptional(tBoolean),
   testIdAttributeName: tOptional(tString),
   launchOptions: tOptional(tAny),

@@ -51,6 +51,17 @@ export type OverlayState = {
   offsetX: number;
 };
 
+export type ToolbarMode = 'playwright' | 'ayme-v1' | 'hidden';
+
+export type ToolbarTheme = 'light' | 'dark';
+
+export type RecorderOptions = {
+  recorderMode?: 'default' | 'api';
+  hideToolbar?: boolean;
+  toolbar?: ToolbarMode;
+  toolbarTheme?: ToolbarTheme;
+};
+
 export type UIState = {
   mode: Mode;
   actionPoint?: Point;
@@ -59,6 +70,7 @@ export type UIState = {
   language: Language;
   testIdAttributeName: string;
   overlay: OverlayState;
+  toolbarTheme: ToolbarTheme;
 };
 
 export type CallLogStatus = 'in-progress' | 'done' | 'error' | 'paused';

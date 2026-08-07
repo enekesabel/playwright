@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-// This is the only dependency this file is allowed to have, because we are fine with a dupe.
-// See DEPS.list for more details.
 import clipPaths from './clipPaths';
+import { AymeToolbar } from './aymeToolbar';
 
 import type { Point } from '@isomorphic/types';
 import type { AriaSnapshot } from '../ariaSnapshot';
@@ -24,8 +23,9 @@ import type { Highlight, HighlightEntry } from '../highlight';
 import type { InjectedScript } from '../injectedScript';
 import type { ElementText } from '../selectorUtils';
 import type * as actions from '@isomorphic/codegen/actions';
-import type { ElementInfo, Mode, OverlayState, UIState } from '@recorder/recorderTypes';
+import type { ElementInfo, Mode, OverlayState, RecorderOptions, UIState } from '@recorder/recorderTypes';
 import type { Language } from '@isomorphic/locatorGenerators';
+import type { RecorderToolbarView } from './toolbarView';
 
 const HighlightColors = {
   multiple: '#f6b26b7f',
@@ -174,7 +174,7 @@ class InspectTool implements RecorderTool {
         signals: [],
       });
       this._recorder.setMode('recording');
-      this._recorder.overlay?.flashToolSucceeded('assertingVisibility');
+      this._recorder.toolbar?.flashToolSucceeded('assertingVisibility');
     } else {
       this._recorder.elementPicked(selector, model);
     }
@@ -748,11 +748,13 @@ class JsonRecordActionTool implements RecorderTool {
 
   install() {
     // No highlight for the lightweight recorder.
-    this._recorder.highlight.uninstall();
+    if (this._recorder.toolbar === this._recorder.overlay)
+      this._recorder.highlight.uninstall();
   }
 
   uninstall() {
-    this._recorder.highlight.install();
+    if (this._recorder.toolbar === this._recorder.overlay)
+      this._recorder.highlight.install();
   }
 
   onClick(event: MouseEvent) {
@@ -1105,7 +1107,7 @@ class TextAssertionTool implements RecorderTool {
     } else if (this._action?.name === 'assertSnapshot') {
       void this._recorder.recordAction(this._action);
       this._recorder.setMode('recording');
-      this._recorder.overlay?.flashToolSucceeded('assertingSnapshot');
+      this._recorder.toolbar?.flashToolSucceeded('assertingSnapshot');
     }
   }
 
@@ -1146,7 +1148,7 @@ class TextAssertionTool implements RecorderTool {
       return;
     void this._recorder.recordAction(action);
     this._recorder.setMode('recording');
-    this._recorder.overlay?.flashToolSucceeded('assertingValue');
+    this._recorder.toolbar?.flashToolSucceeded('assertingValue');
   }
 }
 
@@ -1372,19 +1374,22 @@ export class Recorder {
   private _lastActionAutoexpectSnapshot: AriaSnapshot | undefined;
   readonly highlight: Highlight;
   readonly overlay: Overlay | undefined;
+  readonly toolbar: RecorderToolbarView | undefined;
   private _stylesheet: CSSStyleSheet;
   state: UIState = {
     mode: 'none',
     testIdAttributeName: 'data-testid',
     language: 'javascript',
     overlay: { offsetX: 0 },
+    toolbarTheme: 'light',
   };
   readonly document: Document;
   private _delegate: RecorderDelegate = {};
 
-  constructor(injectedScript: InjectedScript, options?: { recorderMode?: 'default' | 'api', hideToolbar?: boolean }) {
+  constructor(injectedScript: InjectedScript, options?: RecorderOptions) {
     this.document = injectedScript.document;
     this.injectedScript = injectedScript;
+    this.state.toolbarTheme = options?.toolbarTheme ?? 'light';
     this.highlight = injectedScript.createHighlight();
     this._tools = {
       'none': new NoneTool(),
@@ -1399,9 +1404,15 @@ export class Recorder {
     };
     this._currentTool = this._tools.none;
     this._currentTool.install?.();
-    if (injectedScript.window.top === injectedScript.window && !options?.hideToolbar) {
-      this.overlay = new Overlay(this);
-      this.overlay.setUIState(this.state);
+    if (injectedScript.window.top === injectedScript.window) {
+      const toolbarMode = options?.hideToolbar ? 'hidden' : (options?.toolbar ?? 'playwright');
+      if (toolbarMode === 'playwright') {
+        this.overlay = new Overlay(this);
+        this.toolbar = this.overlay;
+      } else if (toolbarMode === 'ayme-v1') {
+        this.toolbar = new AymeToolbar(this);
+      }
+      this.toolbar?.setUIState(this.state);
     }
     this._stylesheet = new injectedScript.window.CSSStyleSheet();
     this._stylesheet.replaceSync(`
@@ -1448,7 +1459,7 @@ export class Recorder {
     this._listeners.push(() => this.injectedScript.utils.builtins.clearTimeout(recreationInterval));
 
     this.highlight.appendChild(createSvgElement(this.document, clipPaths));
-    this.overlay?.install();
+    this.toolbar?.install();
     this._currentTool?.install?.();
     this.document.adoptedStyleSheets.push(this._stylesheet);
   }
@@ -1483,7 +1494,7 @@ export class Recorder {
     this.state = state;
     this.highlight.setLanguage(state.language);
     this._switchCurrentTool();
-    this.overlay?.setUIState(state);
+    this.toolbar?.setUIState(state);
 
     let highlight: HighlightEntry[] | 'clear' | 'noop' = 'noop';
     if (state.actionSelector !== this._lastHighlightedSelector) {

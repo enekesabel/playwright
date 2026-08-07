@@ -286,6 +286,7 @@ export const InspectModeController: React.FunctionComponent<{
         language: sdkLanguage,
         testIdAttributeName,
         overlay: { offsetX: 0 },
+        toolbarTheme: 'light',
       }, {
         async elementPicked(elementInfo: ElementInfo) {
           setHighlightedElement({

@@ -31,20 +31,79 @@ class RecorderLog {
   }
 }
 
-async function startRecording(context) {
+async function startRecording(context, options: Record<string, unknown> = {}) {
   const log = new RecorderLog();
   await (context as any)._enableRecorder({
     mode: 'recording',
     recorderMode: 'api',
+    ...options,
   }, log);
   return {
     action: (name: string) => log.actions.filter(a => a.action.name === name),
+    actions: () => [...log.actions],
   };
 }
 
 function normalizeCode(code: string): string {
   return code.replace(/\s+/g, ' ').trim();
 }
+
+test('should preserve the default Playwright toolbar presentation', async ({ openRecorder }) => {
+  const { recorder } = await openRecorder();
+  await recorder.setContentAndWait('<main>Default toolbar</main>');
+
+  const glass = recorder.page.locator('x-pw-glass');
+  await expect(glass.locator('x-pw-overlay')).toBeVisible();
+  await expect(glass.locator('x-pw-ayme-toolbar')).toHaveCount(0);
+});
+
+for (const toolbarTheme of ['light', 'dark'] as const) {
+  test(`should render the Ayme toolbar with the ${toolbarTheme} theme`, async ({ openRecorder }) => {
+    const { recorder } = await openRecorder({ toolbar: 'ayme-v1', toolbarTheme });
+    await recorder.setContentAndWait('<main>Ayme toolbar</main>');
+
+    const glass = recorder.page.locator('x-pw-glass');
+    const toolbar = glass.locator('x-pw-ayme-toolbar');
+    await expect(toolbar).toBeVisible();
+    await expect(toolbar).toHaveAttribute('data-theme', toolbarTheme);
+    await expect(toolbar.locator('button')).toHaveCount(2);
+    await expect(glass.locator('x-pw-overlay')).toHaveCount(0);
+  });
+}
+
+test('should preserve Ayme toolbar mode transitions, suppression, and assertion success', async ({ openRecorder }) => {
+  const { recorder } = await openRecorder({ toolbar: 'ayme-v1', toolbarTheme: 'light' });
+  await recorder.setContentAndWait('<button>Target</button>');
+
+  const glass = recorder.page.locator('x-pw-glass');
+  const record = glass.getByRole('button', { name: 'Stop Recording' });
+  const assertVisibility = glass.getByRole('button', { name: 'Assert visibility' });
+  const initialOutput = await recorder.text('JavaScript');
+  await expect(record).toBeVisible();
+  await expect(assertVisibility).toBeEnabled();
+
+  await record.click();
+  await expect(glass).toBeAttached();
+  await expect(glass.getByRole('button', { name: 'Start Recording' })).toBeVisible();
+  await expect(assertVisibility).toBeDisabled();
+
+  await glass.getByRole('button', { name: 'Start Recording' }).click();
+  await expect(glass).toBeAttached();
+  await expect(glass.getByRole('button', { name: 'Stop Recording' })).toBeVisible();
+  await assertVisibility.click();
+  await expect(glass).toBeAttached();
+  await expect(assertVisibility).toHaveAttribute('aria-pressed', 'true');
+  expect(await recorder.text('JavaScript')).toBe(initialOutput);
+
+  const outputPromise = recorder.waitForOutput('JavaScript', 'toBeVisible');
+  await recorder.page.getByRole('button', { name: 'Target' }).click();
+
+  await expect(assertVisibility).toHaveClass(/succeeded/);
+  await expect(assertVisibility).toHaveAttribute('aria-pressed', 'false');
+  const output = (await outputPromise).get('JavaScript')!.text;
+  expect(output).toContain(`await expect(page.getByRole('button', { name: 'Target' })).toBeVisible();`);
+  expect(output).not.toContain('.click()');
+});
 
 test('should click', async ({ context, browserName, platform, channel }) => {
   const log = await startRecording(context);

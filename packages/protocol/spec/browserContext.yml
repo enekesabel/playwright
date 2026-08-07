@@ -226,6 +226,17 @@ BrowserContext:
           literals:
           - default
           - api
+        toolbar:
+          type: enum?
+          literals:
+          - playwright
+          - ayme-v1
+          - hidden
+        toolbarTheme:
+          type: enum?
+          literals:
+          - light
+          - dark
         pauseOnNextStatement: boolean?
         testIdAttributeName: string?
         launchOptions: json?

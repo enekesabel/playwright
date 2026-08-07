@@ -41,7 +41,7 @@ import type { AriaTemplateNode } from '@isomorphic/ariaSnapshot';
 import type { Progress } from './progress';
 import type * as channels from './channels';
 import type * as actions from '@isomorphic/codegen/actions';
-import type { CallLog, CallLogStatus, ElementInfo, Mode, OverlayState, Source, UIState } from '@recorder/recorderTypes';
+import type { CallLog, CallLogStatus, ElementInfo, Mode, OverlayState, Source, ToolbarTheme, UIState } from '@recorder/recorderTypes';
 import type { RegisteredListener } from '@utils/eventsHelper';
 
 const recorderSymbol = Symbol('recorderSymbol');
@@ -87,6 +87,7 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
   private _omitCallTracking = false;
   private _currentLanguage: Language = 'javascript';
   private _recorderMode: 'default' | 'api';
+  private _toolbarTheme: ToolbarTheme;
 
   private _signalProcessor: RecorderSignalProcessor;
   private _lastDialogOrdinal = -1;
@@ -122,6 +123,7 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
     this._params = params;
     this._mode = params.mode || 'none';
     this._recorderMode = params.recorderMode ?? 'default';
+    this._toolbarTheme = params.toolbarTheme ?? 'light';
     this.handleSIGINT = params.handleSIGINT;
 
     this._signalProcessor = new RecorderSignalProcessor({
@@ -190,6 +192,7 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
           language: this._currentLanguage,
           testIdAttributeName: this._testIdAttributeName(),
           overlay: this._overlayState,
+          toolbarTheme: this._toolbarTheme,
         };
         return uiState;
       });
@@ -233,7 +236,12 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
       await this._context.exposeBinding(progress, '__pw_recorderRecordAction',
           (source: BindingSource, action: actions.Action) => this._recordAction(progress, source.frame, action));
 
-      await progress.race(this._context.extendInjectedScript(rawRecorderSource.source, { recorderMode: this._recorderMode, hideToolbar: !!this._params.hideToolbar }));
+      await progress.race(this._context.extendInjectedScript(rawRecorderSource.source, {
+        recorderMode: this._recorderMode,
+        hideToolbar: !!this._params.hideToolbar,
+        toolbar: this._params.toolbar,
+        toolbarTheme: this._toolbarTheme,
+      }));
     });
 
     if (this._debugger.isPaused())
@@ -269,6 +277,13 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
         pageToFocus = this._context.pages()[0];
       pageToFocus?.bringToFront(nullProgress).catch(() => {});
     }
+    await this._refreshOverlay();
+  }
+
+  async setToolbarTheme(theme: ToolbarTheme) {
+    if (this._toolbarTheme === theme)
+      return;
+    this._toolbarTheme = theme;
     await this._refreshOverlay();
   }
 
