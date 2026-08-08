@@ -69,6 +69,58 @@ test('should click', async ({ context, browserName, platform, channel }) => {
   expect(normalizeCode(clickActions[0].code)).toEqual(`await page.getByRole('button', { name: 'Submit' }).click();`);
 });
 
+test('should expose a recorder toolbar slot without detaching custom content', async ({ context }) => {
+  const log = new RecorderLog();
+  const page = await context.newPage();
+  const scriptReady = page.waitForEvent('console', msg => msg.text() === 'Recorder script ready for test');
+  await (context as any)._enableRecorder({
+    mode: 'inspecting',
+    recorderMode: 'api',
+  }, log);
+  await scriptReady;
+
+  const slotState = await page.evaluate(() => {
+    const glass = document.querySelector('x-pw-glass[data-pw-recorder]');
+    const slot = glass?.shadowRoot?.querySelector('slot[name="recorder-toolbar"]');
+    if (!glass || !slot)
+      return undefined;
+    const toolbar = document.createElement('x-test-recorder-toolbar');
+    toolbar.slot = 'recorder-toolbar';
+    toolbar.style.pointerEvents = 'auto';
+    const root = toolbar.attachShadow({ mode: 'open' });
+    root.innerHTML = '<button type="button">Custom record</button>';
+    glass.appendChild(toolbar);
+    return {
+      fallback: slot.firstElementChild?.nodeName.toLowerCase(),
+      assigned: slot.assignedElements().map(element => element.nodeName.toLowerCase()),
+    };
+  });
+
+  expect(slotState).toEqual({
+    fallback: 'x-pw-overlay',
+    assigned: ['x-test-recorder-toolbar'],
+  });
+
+  await page.getByRole('button', { name: 'Custom record' }).click();
+  await page.waitForTimeout(100);
+  expect(log.actions).toHaveLength(0);
+
+  const glassStayedAttached = await page.evaluate(async () => {
+    const glass = document.querySelector('x-pw-glass[data-pw-recorder]');
+    if (!glass)
+      return false;
+    let disconnected = false;
+    const observer = new MutationObserver(() => disconnected ||= !glass.isConnected);
+    observer.observe(document, { childList: true, subtree: true });
+    await (window as unknown as { __pw_recorderSetMode(mode: string): Promise<void> }).__pw_recorderSetMode('recording');
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    observer.disconnect();
+    return !disconnected && glass.isConnected;
+  });
+
+  expect(glassStayedAttached).toBe(true);
+});
+
 test('should double click', async ({ context, browserName, platform, channel }) => {
   const log = await startRecording(context);
   const page = await context.newPage();

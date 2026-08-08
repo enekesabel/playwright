@@ -53,6 +53,7 @@ export type HighlightEntry = {
 export class Highlight {
   private _glassPaneElement: HTMLElement;
   private _glassPaneShadow: ShadowRoot;
+  private _recorderToolbarSlot: HTMLSlotElement | undefined;
   private _renderedEntries: RenderedHighlightEntry[] = [];
   private _actionPointElement: HTMLElement;
   private _actionCursorElement: HTMLElement;
@@ -461,6 +462,20 @@ export class Highlight {
 
   appendChild(element: Element) {
     this._glassPaneShadow.appendChild(element);
+  }
+
+  installRecorderToolbar(element: Element) {
+    if (!this._recorderToolbarSlot) {
+      this._glassPaneElement.setAttribute('data-pw-recorder', '');
+      this._recorderToolbarSlot = this._injectedScript.document.createElement('slot');
+      this._recorderToolbarSlot.name = 'recorder-toolbar';
+      this._glassPaneShadow.appendChild(this._recorderToolbarSlot);
+    }
+    this._recorderToolbarSlot.appendChild(element);
+  }
+
+  hasCustomRecorderToolbar() {
+    return !!this._recorderToolbarSlot?.assignedElements().length;
   }
 
   onGlassPaneClick(handler: (event: MouseEvent) => void) {
