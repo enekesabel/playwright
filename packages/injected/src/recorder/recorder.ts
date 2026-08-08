@@ -748,11 +748,13 @@ class JsonRecordActionTool implements RecorderTool {
 
   install() {
     // No highlight for the lightweight recorder.
-    this._recorder.highlight.uninstall();
+    if (!this._recorder.highlight.hasCustomRecorderToolbar())
+      this._recorder.highlight.uninstall();
   }
 
   uninstall() {
-    this._recorder.highlight.install();
+    if (!this._recorder.highlight.hasCustomRecorderToolbar())
+      this._recorder.highlight.install();
   }
 
   onClick(event: MouseEvent) {
@@ -1263,7 +1265,7 @@ class Overlay {
   }
 
   install() {
-    this._recorder.highlight.appendChild(this._overlayElement);
+    this._recorder.highlight.installRecorderToolbar(this._overlayElement);
     this._refreshListeners();
     this._updateVisualPosition();
   }
