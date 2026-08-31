@@ -527,6 +527,43 @@ it('should resolve refs of distilled-away nodes', async ({ page }) => {
   await expect(page.locator('aria-ref=e3')).toHaveText('[Feature] a dedicated clipboard API');
 });
 
+it('should capture distilled and full snapshots with the same refs', async ({ page, toImpl }) => {
+  await page.setContent(`
+    <a style="cursor: pointer" href="/issues/15860"><div>[Feature] a dedicated clipboard API</div></a>
+    <p style="pointer-events: none">Static text</p>
+  `);
+
+  const mainContext = await toImpl(page).mainFrame().mainContext();
+  const injected = await mainContext.injectedScript();
+  const capture = await injected.evaluate((injected: {
+    document: Document;
+    captureAriaSnapshot: (root: Element) => { distilledText: string, fullText: string, refsByElement: Map<Element, string> };
+  }) => {
+    const result = injected.captureAriaSnapshot(injected.document.body);
+    const elements = [...injected.document.querySelectorAll('body, a, div, p')];
+    return {
+      keys: Object.keys(result).sort(),
+      distilledText: result.distilledText,
+      fullText: result.fullText,
+      refs: elements.map(element => result.refsByElement.get(element)),
+      allRefs: [...result.refsByElement.values()],
+    };
+  });
+
+  expect(capture.keys).toEqual(['distilledText', 'fullText', 'refsByElement']);
+  expect(capture.distilledText).toBe(await snapshotForAI(page));
+  expect(capture.refs).not.toContain(undefined);
+  expect(capture.allRefs).toHaveLength(capture.refs.length);
+  for (const ref of capture.allRefs)
+    expect(capture.fullText).toContain(`[ref=${ref}]`);
+  const linkRef = capture.refs[1];
+  const distilledAwayRef = capture.refs[2];
+  expect(capture.distilledText).toContain(`[ref=${linkRef}]`);
+  expect(capture.fullText).toContain(`[ref=${linkRef}]`);
+  expect(capture.distilledText).not.toContain(`[ref=${distilledAwayRef}]`);
+  expect(capture.fullText).toContain(`[ref=${distilledAwayRef}]`);
+});
+
 it('should not distill snapshots outside of ai mode', async ({ page }) => {
   await page.setContent(`
     <h3><a href="/issues/1">Clipboard API</a></h3>

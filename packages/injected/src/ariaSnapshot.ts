@@ -82,7 +82,7 @@ function toInternalOptions(options: AriaTreeOptions): InternalOptions {
   return { visibility: 'aria', refs: 'none', renderBoxes };
 }
 
-export function generateAriaTree(rootElement: Element, publicOptions: AriaTreeOptions): AriaSnapshot {
+export function generateAriaTree(rootElement: Element, publicOptions: AriaTreeOptions, beforeDistill?: (snapshot: AriaSnapshot) => void): AriaSnapshot {
   const options = toInternalOptions(publicOptions);
   const visited = new Set<Node>();
   // For each node, the elements that contributed to its accessible name.
@@ -215,8 +215,40 @@ export function generateAriaTree(rootElement: Element, publicOptions: AriaTreeOp
     roleUtils.endAriaCaches();
   }
 
+  beforeDistill?.(snapshot);
   distillAriaSnapshot(snapshot, publicOptions);
   return snapshot;
+}
+
+export function captureAriaSnapshot(rootElement: Element, options: AriaTreeOptions): { distilledText: string, fullText: string, refsByElement: Map<Element, string> } {
+  let fullText = '';
+  const allRefsOptions: InternalOptions = { ...toInternalOptions(options), refs: 'all' };
+  const snapshot = generateAriaTree(rootElement, options, snapshot => {
+    const addedRefs: aria.AriaNode[] = [];
+    const visit = (node: aria.AriaNode) => {
+      if (!node.ref) {
+        computeAriaRef(node, allRefsOptions);
+        snapshot.refs.set(ariaNodeElement(node), node.ref!);
+        addedRefs.push(node);
+      }
+      for (const child of node.children) {
+        if (typeof child !== 'string')
+          visit(child);
+      }
+    };
+    for (const child of snapshot.root.children) {
+      if (typeof child !== 'string')
+        visit(child);
+    }
+    fullText = renderAriaTree(snapshot, options).text;
+    for (const node of addedRefs)
+      node.ref = undefined;
+  });
+  return {
+    distilledText: renderAriaTree(snapshot, options).text,
+    fullText,
+    refsByElement: snapshot.refs,
+  };
 }
 
 function computeAriaRef(ariaNode: aria.AriaNode, options: InternalOptions) {
