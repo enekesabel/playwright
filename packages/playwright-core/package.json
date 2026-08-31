@@ -14,9 +14,6 @@
     "name": "Microsoft Corporation"
   },
   "license": "Apache-2.0",
-  "scripts": {
-    "prepare": "npm --prefix ../.. run build"
-  },
   "exports": {
     ".": {
       "types": "./index.d.ts",
