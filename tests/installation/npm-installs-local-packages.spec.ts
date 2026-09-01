@@ -16,6 +16,7 @@
 import path from 'path';
 import { test, expect } from './npmTest';
 import fs from 'fs';
+import vm from 'vm';
 
 test('installs local packages', async ({ registry, exec, tmpWorkspace }) => {
   const packages = ['playwright', 'playwright-core', 'playwright-chromium', 'playwright-firefox', 'playwright-webkit', '@playwright/test', '@playwright/browser-chromium', '@playwright/browser-firefox', '@playwright/browser-webkit'];
@@ -33,4 +34,20 @@ test('installs local packages', async ({ registry, exec, tmpWorkspace }) => {
       expect(installedVersion).toBe(expectedPlaywrightVersion);
     });
   }
+});
+
+test('installs generated injected script source', async ({ exec, tmpWorkspace }) => {
+  await exec('npm i --foreground-scripts', 'playwright-core', { env: { PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' } });
+
+  const generatedSourcePath = path.join(tmpWorkspace, 'node_modules', 'playwright-core', 'src', 'generated', 'injectedScriptSource.ts');
+  const generatedSource = await fs.promises.readFile(generatedSourcePath, 'utf8');
+  const prefix = 'export const source = ';
+  expect(generatedSource.startsWith(prefix)).toBeTruthy();
+  expect(generatedSource.endsWith(';')).toBeTruthy();
+
+  const source = JSON.parse(generatedSource.slice(prefix.length, -1));
+  const injectedModule = { exports: {} as { InjectedScript?: () => { prototype: { captureAriaSnapshot?: unknown } } } };
+  vm.runInNewContext(source, { module: injectedModule, exports: injectedModule.exports });
+  const InjectedScript = injectedModule.exports.InjectedScript?.();
+  expect(typeof InjectedScript?.prototype.captureAriaSnapshot).toBe('function');
 });
